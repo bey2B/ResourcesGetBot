@@ -1,50 +1,50 @@
-# ResourcesGetBot \u9879\u76ee\u6307\u5357
+# ResourcesGetBot 项目指南
 
-## \u9879\u76ee\u6982\u8ff0
-\u57fa\u4e8e aiogram 3.x + FastAPI + SQLite \u7684 Telegram \u79c1\u5bc6\u8d44\u6e90\u5206\u4eab Bot\u3002
-\u7ba1\u7406\u5458\u53ef\u4ee5\u901a\u8fc7 Bot \u4e0a\u4f20\u89c6\u9891/\u56fe\u7247/\u6587\u6863\uff0c\u81ea\u52a8\u751f\u6210\u77ed\u7801\uff0c\u7528\u6237\u83b7\u53d6\u65f6\u9700\u5148\u5173\u6ce8\u9891\u9053\u3002
+## 项目概述
+基于 aiogram 3.x + FastAPI + SQLite 的 Telegram 私密资源分享 Bot。
+管理员可以通过 Bot 上传视频/图片/文档，自动生成短码，用户获取时需先关注频道。
 
-## \u6838\u5fc3\u6587\u4ef6
-- `main.py` \u2014 Bot \u4e3b\u8fdb\u7a0b\u5165\u53e3
-- `web.py` \u2014 FastAPI Web \u540e\u53f0\u5165\u53e3
-- `app/config.py` \u2014 \u914d\u7f6e\u8bfb\u53d6
-- `app/database.py` \u2014 \u6570\u636e\u5e93\u8fde\u63a5\u4e0e\u8fc1\u79fb
-- `app/models.py` \u2014 \u6570\u636e\u5e93\u6a21\u578b
-- `app/repositories.py` \u2014 \u6570\u636e\u5e93\u67e5\u8be2\u5c42
-- `app/bot/services.py` \u2014 Bot \u6838\u5fc3\u4e1a\u52a1\u903b\u8f91
-- `app/bot/handlers/` \u2014 Bot \u6d88\u606f\u5904\u7406
-- `app/web/main.py` \u2014 Web \u540e\u53f0\u8def\u7531
-- `app/web/templates/` \u2014 Jinja2 \u6a21\u677f
+## 核心文件
+- `main.py` — Bot 主进程入口
+- `web.py` — FastAPI Web 后台入口
+- `app/config.py` — 配置读取
+- `app/database.py` — 数据库连接与迁移
+- `app/models.py` — 数据库模型
+- `app/repositories.py` — 数据库查询层
+- `app/bot/services.py` — Bot 核心业务逻辑
+- `app/bot/handlers/` — Bot 消息处理
+- `app/web/main.py` — Web 后台路由
+- `app/web/templates/` — Jinja2 模板
 
-## \u5e38\u89c1\u64cd\u4f5c
+## 常见操作
 
-### \u542f\u52a8\u670d\u52a1
+### 启动服务
 - Bot: `.venv/bin/python main.py`
 - Web: `.venv/bin/uvicorn web:app --host 0.0.0.0 --port 8000`
 
-### \u6570\u636e\u5e93\u8fc1\u79fb
-\u81ea\u52a8\u5728\u542f\u52a8\u65f6\u6267\u884c\uff08init_db \u4e2d\u7684 ALTER TABLE\uff09
+### 数据库迁移
+自动在启动时执行（init_db 中的 ALTER TABLE）
 
-### \u914d\u7f6e\u6587\u4ef6
-`.env` \u6587\u4ef6\u4e2d\u914d\u7f6e\u6240\u6709\u53c2\u6570\u3002\u5173\u952e\u5b57\u6bb5\uff1a
-- `BOT_TOKEN` \u2014 Telegram Bot Token
-- `CHANNEL_ID` \u2014 \u5173\u6ce8\u68c0\u67e5\u7684\u9891\u9053 ID
-- `ADMIN_USER_ID` / `ADMIN_USER_IDS` \u2014 \u7ba1\u7406\u5458\u7528\u6237 ID
-- `WEB_ADMIN_PASSWORD` \u2014 \u540e\u53f0\u767b\u5f55\u5bc6\u7801
+### 配置文件
+`.env` 文件中配置所有参数。关键字段：
+- `BOT_TOKEN` — Telegram Bot Token
+- `CHANNEL_ID` — 关注检查的频道 ID
+- `ADMIN_USER_ID` / `ADMIN_USER_IDS` — 管理员用户 ID
+- `WEB_ADMIN_PASSWORD` — 后台登录密码
 
-### Web \u540e\u53f0\u8def\u7531
-- `/admin` \u2014 \u8d44\u6e90\u5217\u8868
-- `/admin/users` \u2014 \u7528\u6237\u5217\u8868\uff08\u5c01\u7981/\u89e3\u5c01\uff09
-- `/admin/stats` \u2014 \u7edf\u8ba1
-- `/admin/broadcast` \u2014 \u5e7f\u64ad
-- `/admin/resources/new` \u2014 \u65b0\u589e\u8d44\u6e90
-- `/admin/stats/data` \u2014 \u7edf\u8ba1 API
-- `/admin/users/{id}/ban` \u2014 \u5c01\u7981 API
-- `/admin/users/{id}/unban` \u2014 \u89e3\u5c01 API
+### Web 后台路由
+- `/admin` — 资源列表
+- `/admin/users` — 用户列表（封禁/解封）
+- `/admin/stats` — 统计
+- `/admin/broadcast` — 广播
+- `/admin/resources/new` — 新增资源
+- `/admin/stats/data` — 统计 API
+- `/admin/users/{id}/ban` — 封禁 API
+- `/admin/users/{id}/unban` — 解封 API
 
-## \u6ce8\u610f\u4e8b\u9879
-- \u767b\u5f55\u7528 HTTP Basic Auth
-- \u5e7f\u64ad\u76f4\u63a5\u7528 Bot Token \u521b\u5efa\u4e34\u65f6 Bot \u5b9e\u4f8b\uff0c\u9700\u786e\u4fdd\u7f51\u7edc\u53ef\u8bbf\u95ee Telegram API
-- \u5e7f\u64ad\u652f\u6301\u5a92\u4f53\uff08photo/video/document\uff09+ \u5bcc\u6587\u672c\uff08HTML\uff09
-- \u7528\u6237\u88ab\u5c01\u7981\u540e\u65e0\u6cd5\u83b7\u53d6\u4efb\u4f55\u8d44\u6e90
-- \u6570\u636e\u5e93\u9ed8\u8ba4\u4e3a SQLite\uff0c\u8def\u5f84\u5728 data/bot.db
+## 注意事项
+- 登录用 HTTP Basic Auth
+- 广播直接用 Bot Token 创建临时 Bot 实例，需确保网络可访问 Telegram API
+- 广播支持媒体（photo/video/document）+ 富文本（HTML）
+- 用户被封禁后无法获取任何资源
+- 数据库默认为 SQLite，路径在 data/bot.db
