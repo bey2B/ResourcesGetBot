@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="toolbar">
-  <h1>\u7edf\u8ba1</h1>
+  <h1>统计</h1>
 </div>
 
 <div class="stat-cards">
   <div class="stat-card">
     <div class="stat-number" id="totalUsers">-</div>
-    <div class="stat-label">\u603b\u7528\u6237\u6570</div>
+    <div class="stat-label">总用户数</div>
   </div>
 </div>
 
 <div class="chart-container">
-  <h2>\u6bcf\u65e5\u6ce8\u518c\u7528\u6237</h2>
+  <h2>每日注册用户</h2>
   <canvas id="regChart"></canvas>
 </div>
 
 <div class="chart-container">
-  <h2>\u6bcf\u65e5\u4e0b\u8f7d\u6b21\u6570</h2>
+  <h2>每日下载次数</h2>
   <canvas id="dlChart"></canvas>
 </div>
 
 <div class="chart-container">
-  <h2>\u6bcf\u65e5\u6d3b\u8dc3\u7528\u6237</h2>
+  <h2>每日活跃用户</h2>
   <canvas id="activeChart"></canvas>
 </div>
 

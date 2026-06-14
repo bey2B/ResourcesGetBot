@@ -289,8 +289,11 @@ async def broadcast_send(
         )
 
     settings = get_settings()
+    from aiogram.client.session.aiohttp import AiohttpSession
+    bs = AiohttpSession(proxy=settings.proxy_url) if settings.proxy_url else None
     bot = Bot(
         token=settings.bot_token,
+        session=bs,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     try:
@@ -299,6 +302,7 @@ async def broadcast_send(
 
         success = 0
         failed = 0
+        failed_reasons = []
         for uid in user_ids:
             try:
                 if file_id.strip() and file_type.strip():
@@ -311,14 +315,15 @@ async def broadcast_send(
                 else:
                     await bot.send_message(chat_id=uid, text=message_text)
                 success += 1
-            except Exception:
+            except Exception as e:
                 failed += 1
+                failed_reasons.append(str(e)[:80])
     finally:
         await bot.session.close()
 
     return templates.TemplateResponse(
         request, "broadcast.html",
-        {"request": request, "result": {"success": success, "failed": failed}},
+        {"request": request, "result": {"success": success, "failed": failed, "reasons": failed_reasons}},
     )
 
 

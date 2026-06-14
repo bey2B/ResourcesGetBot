@@ -48,7 +48,7 @@ async def send_subscribe_prompt(message: Message, short_code: str) -> None:
     settings = get_settings()
     await message.answer(
         f'<i>\u60a8\u9700\u8981\u52a0\u5165\u4ee5\u4e0b\u9891\u9053\u624d\u80fd\u4f7f\u7528</i>\n'
-        f'<a href=\"{settings.channel_url}\">\u70e7\u9e21\u6536\u85cf\u5939|\u6e05\u6f88\u5206\u7c7b</a>',
+        f'<a href=\"{settings.channel_url}\">喜欢看清纯洁白的素人</a>',
         reply_markup=subscribe_keyboard(short_code),
     )
 

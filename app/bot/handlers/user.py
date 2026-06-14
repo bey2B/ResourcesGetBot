@@ -52,7 +52,7 @@ async def get_by_short_code(message: Message, bot: Bot) -> None:
 
 @router.message(F.chat.type == "private", F.text)
 async def unknown_text(message: Message) -> None:
-    await message.answer("\u8bf7\u53d1\u9001\u6709\u6548\u8d44\u6e90\u77ed\u7801\uff0c\u4f8b\u5982\uff1ab0942703")
+    await message.answer("本机器人非双向机器人,双向请用 @LingFaBot")
 
 
 # -------- Callback: user clicked "\u2705\u6211\u5df2\u5173\u6ce8" --------
