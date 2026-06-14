@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="toolbar">
-  <h1>\u5e7f\u64ad\u6d88\u606f</h1>
+  <h1>广播消息</h1>
 </div>
 
 {% if result %}
@@ -9,28 +9,37 @@
   <div class="error">{{ result.error }}</div>
   {% else %}
   <div class="success">
-    \u5e7f\u64ad\u5b8c\u6210\uff1a\u6210\u529f {{ result.success }} \u4e2a\uff0c\u5931\u8d25 {{ result.failed }} \u4e2a
+    广播完成：成功 {{ result.success }} 个，失败 {{ result.failed }} 个
   </div>
   {% endif %}
 {% endif %}
 
 <form method="post" class="form">
-  <label for="message_text">\u6d88\u606f\u5185\u5bb9\uff08\u652f\u6301 HTML\uff09</label>
-  <textarea id="message_text" name="message_text" rows="6" placeholder="<b>\u7c97\u4f53</b> \u6b63\u5e38\u6587\u672c"><\/textarea>
-  <p class="hint">\u53ef\u4f7f\u7528 HTML \u6807\u7b7e\uff1a&lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;</p>
+  <label for="message_text">消息内容（支持 HTML）</label>
+  <textarea id="message_text" name="message_text" rows="6" placeholder="<b>粗体</b> 正常文本"></textarea>
+  <div class="hint-box">
+    <strong>格式指南：</strong><br>
+    <b>&lt;b&gt;粗体&lt;/b&gt;</b> — 粗体文字<br>
+    <i>&lt;i&gt;斜体&lt;/i&gt;</i> — 斜体文字<br>
+    <code>&lt;code&gt;代码&lt;/code&gt;</code> — 等宽字体<br>
+    &lt;a href="https://..."&gt;链接文字&lt;/a&gt; — 可点击链接<br>
+    &lt;pre&gt;多行文本&lt;/pre&gt; — 保留换行和格式<br>
+    &lt;blockquote&gt;引用&lt;/blockquote&gt; — 引用区块<br><br>
+    注意：不支持 Markdown，请使用 HTML 标签。
+  </div>
 
   <hr>
-  <p><strong>\u5a92\u4f53\uff08\u53ef\u9009\uff09</strong></p>
+  <p><strong>媒体（可选）</strong></p>
 
   <label for="file_id">file_id</label>
-  <input id="file_id" name="file_id" placeholder="\u7559\u7a7a\u5219\u4ec5\u53d1\u9001\u6587\u672c\u6d88\u606f">
+  <input id="file_id" name="file_id" placeholder="留空则仅发送文本消息">
 
-  <label for="file_type">\u6587\u4ef6\u7c7b\u578b</label>
+  <label for="file_type">文件类型</label>
   <select id="file_type" name="file_type">
-    <option value="">\u4e0d\u53d1\u9001\u5a92\u4f53</option>
-    <option value="photo">\u56fe\u7247 (photo)</option>
-    <option value="video">\u89c6\u9891 (video)</option>
-    <option value="document">\u6587\u6863 (document)</option>
+    <option value="">不发送媒体</option>
+    <option value="photo">图片 (photo)</option>
+    <option value="video">视频 (video)</option>
+    <option value="document">文档 (document)</option>
   </select>
 
   <p>
@@ -44,5 +53,7 @@
 .success { background: #e3fcef; border: 1px solid #b2dfc8; color: #10653b; padding: 10px 12px; margin-bottom: 12px; }
 .hint { font-size: 13px; color: #627d98; margin: 4px 0 12px; }
 hr { border: 0; border-top: 1px solid #d9e2ec; margin: 18px 0; }
-<\/style>
+.hint-box { background: #f0f4f8; border: 1px solid #d9e2ec; border-radius: 6px; padding: 12px 14px; margin-bottom: 14px; font-size: 13px; line-height: 1.7; color: #334e68; }
+.hint-box strong { color: #102a43; }
+</style>
 {% endblock %}
