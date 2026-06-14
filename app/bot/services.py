@@ -118,6 +118,11 @@ async def handle_resource_request(
         return
 
     user = await upsert_user(session, message.from_user)
+    if user.is_banned:
+        await session.commit()
+        await message.answer("\u4f60\u5df2\u88ab\u5c01\u7981\uff0c\u65e0\u6cd5\u4f7f\u7528\u672c\u673a\u5668\u4eba\u3002")
+        return
+
     resource = await get_resource_by_code(session, short_code)
     if resource is None:
         await session.commit()

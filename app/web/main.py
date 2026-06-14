@@ -10,6 +10,10 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 
+from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+
 from app.config import get_settings
 from app.database import async_session, init_db
 from app.repositories import (
@@ -257,6 +261,81 @@ async def admin_stats_data(_: str = Depends(require_admin)):
         "daily_downloads": daily_downloads,
         "daily_active_users": daily_active_users,
     }
+
+
+@app.get("/admin/broadcast")
+async def broadcast_form(request: Request, _: str = Depends(require_admin)):
+    return templates.TemplateResponse(
+        request, "broadcast.html",
+        {"request": request, "result": None},
+    )
+
+
+@app.post("/admin/broadcast")
+async def broadcast_send(
+    request: Request,
+    message_text: str = Form(""),
+    file_id: str = Form(""),
+    file_type: str = Form(""),
+    _: str = Depends(require_admin),
+):
+    if not message_text.strip() and not file_id.strip():
+        return templates.TemplateResponse(
+            request, "broadcast.html",
+            {"request": request, "result": {"error": "\u8bf7\u8f93\u5165\u6d88\u606f\u5185\u5bb9\u6216\u8005\u4e0a\u4f20\u5a92\u4f53"}},
+        )
+
+    settings = get_settings()
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    try:
+        async with async_session() as session:
+            user_ids = await get_all_user_ids(session)
+
+        success = 0
+        failed = 0
+        for uid in user_ids:
+            try:
+                if file_id.strip() and file_type.strip():
+                    if file_type == "photo":
+                        await bot.send_photo(chat_id=uid, photo=file_id.strip(), caption=message_text or None)
+                    elif file_type == "video":
+                        await bot.send_video(chat_id=uid, video=file_id.strip(), caption=message_text or None)
+                    elif file_type == "document":
+                        await bot.send_document(chat_id=uid, document=file_id.strip(), caption=message_text or None)
+                else:
+                    await bot.send_message(chat_id=uid, text=message_text)
+                success += 1
+            except Exception:
+                failed += 1
+    finally:
+        await bot.session.close()
+
+    return templates.TemplateResponse(
+        request, "broadcast.html",
+        {"request": request, "result": {"success": success, "failed": failed}},
+    )
+
+
+# Add ban/unban routes
+@app.post("/admin/users/{user_id}/ban")
+async def ban_user_action(user_id: int, _: str = Depends(require_admin)):
+    async with async_session() as session:
+        user = await ban_user(session, user_id)
+        if user:
+            await session.commit()
+    return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/users/{user_id}/unban")
+async def unban_user_action(user_id: int, _: str = Depends(require_admin)):
+    async with async_session() as session:
+        user = await unban_user(session, user_id)
+        if user:
+            await session.commit()
+    return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/admin/users")

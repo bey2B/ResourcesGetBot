@@ -50,6 +50,7 @@ class User(Base):
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     download_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_banned: Mapped[bool] = mapped_column(Integer, default=0)
 
     downloads: Mapped[list["DownloadLog"]] = relationship(back_populates="user")
 

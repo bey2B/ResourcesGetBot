@@ -61,6 +61,8 @@ async def _migrate_schema(conn) -> None:
          "mosaic_status"),
         ("ALTER TABLE resources ADD COLUMN video_direction VARCHAR(32)",
          "video_direction"),
+        ("ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0",
+         "is_banned"),
     ]
     for stmt, col_name in migrations:
         try:

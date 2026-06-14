@@ -22,12 +22,12 @@
       <td>{{ user.username }}</td>
       <td>{{ user.first_name }}</td>
       <td>{{ user.joined_at.strftime("%Y-%m-%d %H:%M") }}</td>
-      <td>{{ user.last_seen_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ user.last_seen_at.strftime("%Y-%m-%d %H:%M") }}</td>\n      <td>{{ "已封禁" if user.is_banned else "正常" }}</td>\n      <td>\n        {% if user.is_banned %}\n        <form class="inline" method="post" action="/admin/users/{{ user.user_id }}/unban">\n          <button class="button secondary" type="submit">解封</button>\n        </form>\n        {% else %}\n        <form class="inline" method="post" action="/admin/users/{{ user.user_id }}/ban">\n          <button class="button danger" type="submit">封禁</button>\n        </form>\n        {% endif %}\n      </td>
       <td>{{ user.download_count }}</td>
     </tr>
     {% else %}
     <tr>
-      <td colspan="6" class="muted">暂无用户</td>
+      <td colspan="8" class="muted">暂无用户</td>
     </tr>
     {% endfor %}
   </tbody>

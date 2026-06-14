@@ -163,6 +163,37 @@ async def get_daily_active_users(session: AsyncSession, days: int = 30) -> list[
     return [{"date": str(r[0]), "count": r[1]} for r in rows.all()]
 
 
+async def ban_user(session: AsyncSession, user_id: int) -> User | None:
+    result = await session.execute(select(User).where(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    if user:
+        user.is_banned = True
+        await session.flush()
+    return user
+
+
+async def unban_user(session: AsyncSession, user_id: int) -> User | None:
+    result = await session.execute(select(User).where(User.user_id == user_id))
+    user = result.scalar_one_or_none()
+    if user:
+        user.is_banned = False
+        await session.flush()
+    return user
+
+
+async def get_all_user_ids(session: AsyncSession) -> list[int]:
+    result = await session.execute(select(User.user_id).where(User.is_banned == 0))
+    return [r[0] for r in result.all()]
+
+
+async def count_online_users(session: AsyncSession, minutes: int = 5) -> int:
+    since = utc_now() - timedelta(minutes=minutes)
+    result = await session.execute(
+        select(func.count(User.user_id)).where(User.last_seen_at >= since)
+    )
+    return result.scalar_one() or 0
+
+
 async def log_download(session: AsyncSession, *, user: User, resource: Resource) -> None:
     session.add(DownloadLog(user_id=user.user_id, resource_id=resource.id))
     user.download_count += 1

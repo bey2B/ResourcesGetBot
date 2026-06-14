@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="toolbar">
+  <h1>\u5e7f\u64ad\u6d88\u606f</h1>
+</div>
+
+{% if result %}
+  {% if result.error %}
+  <div class="error">{{ result.error }}</div>
+  {% else %}
+  <div class="success">
+    \u5e7f\u64ad\u5b8c\u6210\uff1a\u6210\u529f {{ result.success }} \u4e2a\uff0c\u5931\u8d25 {{ result.failed }} \u4e2a
+  </div>
+  {% endif %}
+{% endif %}
+
+<form method="post" class="form">
+  <label for="message_text">\u6d88\u606f\u5185\u5bb9\uff08\u652f\u6301 HTML\uff09</label>
+  <textarea id="message_text" name="message_text" rows="6" placeholder="<b>\u7c97\u4f53</b> \u6b63\u5e38\u6587\u672c"><\/textarea>
+  <p class="hint">\u53ef\u4f7f\u7528 HTML \u6807\u7b7e\uff1a&lt;b&gt;, &lt;i&gt;, &lt;a&gt;, &lt;code&gt;</p>
+
+  <hr>
+  <p><strong>\u5a92\u4f53\uff08\u53ef\u9009\uff09</strong></p>
+
+  <label for="file_id">file_id</label>
+  <input id="file_id" name="file_id" placeholder="\u7559\u7a7a\u5219\u4ec5\u53d1\u9001\u6587\u672c\u6d88\u606f">
+
+  <label for="file_type">\u6587\u4ef6\u7c7b\u578b</label>
+  <select id="file_type" name="file_type">
+    <option value="">\u4e0d\u53d1\u9001\u5a92\u4f53</option>
+    <option value="photo">\u56fe\u7247 (photo)</option>
+    <option value="video">\u89c6\u9891 (video)</option>
+    <option value="document">\u6587\u6863 (document)</option>
+  </select>
+
+  <p>
+    <button class="button" type="submit">\u53d1\u9001\u5e7f\u64ad</button>
+  </p>
+</form>
+
+<style>
+.success { background: #e3fcef; border: 1px solid #b2dfc8; color: #10653b; padding: 10px 12px; margin-bottom: 12px; }
+.hint { font-size: 13px; color: #627d98; margin: 4px 0 12px; }
+hr { border: 0; border-top: 1px solid #d9e2ec; margin: 18px 0; }
+<\/style>
+{% endblock %}
