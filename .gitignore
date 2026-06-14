@@ -1,0 +1,17 @@
+.env
+data/
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+
+
+*.log
+getupdates.json
+fix_*.py
+bot_out*
+bot_startup*
+bot_err*

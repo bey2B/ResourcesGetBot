@@ -1,0 +1,2 @@
+from app.web.main import app
+

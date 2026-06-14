@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+import secrets
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import IntegrityError
+
+from app.config import get_settings
+from app.database import async_session, init_db
+from app.repositories import (
+    create_resource,
+    delete_resource,
+    get_resource,
+    get_resource_by_code,
+    list_resources,
+    list_users,
+    update_resource,
+)
+
+
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+security = HTTPBasic()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
+
+app = FastAPI(title="ResourcesGetBot Admin", lifespan=lifespan)
+
+
+def require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    settings = get_settings()
+    username_ok = secrets.compare_digest(
+        credentials.username,
+        settings.web_admin_username,
+    )
+    password_ok = secrets.compare_digest(
+        credentials.password,
+        settings.web_admin_password,
+    )
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+@app.get("/")
+async def index(_: str = Depends(require_admin)) -> RedirectResponse:
+    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin")
+async def admin_resources(request: Request, _: str = Depends(require_admin)):
+    async with async_session() as session:
+        resources = await list_resources(session)
+    return templates.TemplateResponse(
+        request,
+        "resources.html",
+        {"request": request, "resources": resources},
+    )
+
+
+@app.get("/admin/resources/new")
+async def new_resource_form(request: Request, _: str = Depends(require_admin)):
+    return templates.TemplateResponse(
+        request,
+        "resource_form.html",
+        {
+            "request": request,
+            "resource": None,
+            "action": "/admin/resources",
+            "error": "",
+        },
+    )
+
+
+@app.post("/admin/resources")
+async def create_resource_action(
+    request: Request,
+    short_code: str = Form(...),
+    title: str = Form(""),
+    tags: str = Form(""),
+    file_id: str = Form(...),
+    file_type: str = Form(...),
+    caption: str = Form(""),
+    _: str = Depends(require_admin),
+):
+    async with async_session() as session:
+        if await get_resource_by_code(session, short_code):
+            return templates.TemplateResponse(
+                request,
+                "resource_form.html",
+                {
+                    "request": request,
+                    "resource": None,
+                    "action": "/admin/resources",
+                    "error": "短码已存在，请换一个。",
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            await create_resource(
+                session,
+                short_code=short_code,
+                title=title or short_code,
+                tags=tags,
+                file_id=file_id,
+                file_type=file_type,
+                caption=caption,
+                created_by=0,
+            )
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return templates.TemplateResponse(
+                request,
+                "resource_form.html",
+                {
+                    "request": request,
+                    "resource": None,
+                    "action": "/admin/resources",
+                    "error": "保存失败：短码可能已存在。",
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/resources/{resource_id}/edit")
+async def edit_resource_form(
+    resource_id: int,
+    request: Request,
+    _: str = Depends(require_admin),
+):
+    async with async_session() as session:
+        resource = await get_resource(session, resource_id)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="Resource not found")
+    return templates.TemplateResponse(
+        request,
+        "resource_form.html",
+        {
+            "request": request,
+            "resource": resource,
+            "action": f"/admin/resources/{resource_id}/edit",
+            "error": "",
+        },
+    )
+
+
+@app.post("/admin/resources/{resource_id}/edit")
+async def edit_resource_action(
+    resource_id: int,
+    request: Request,
+    short_code: str = Form(...),
+    title: str = Form(""),
+    tags: str = Form(""),
+    file_id: str = Form(...),
+    file_type: str = Form(...),
+    caption: str = Form(""),
+    _: str = Depends(require_admin),
+):
+    async with async_session() as session:
+        resource = await get_resource(session, resource_id)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        existing = await get_resource_by_code(session, short_code)
+        if existing is not None and existing.id != resource_id:
+            return templates.TemplateResponse(
+                request,
+                "resource_form.html",
+                {
+                    "request": request,
+                    "resource": resource,
+                    "action": f"/admin/resources/{resource_id}/edit",
+                    "error": "短码已被其他资源使用。",
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        await update_resource(
+            session,
+            resource,
+            short_code=short_code,
+            title=title or short_code,
+            tags=tags,
+            file_id=file_id,
+            file_type=file_type,
+            caption=caption,
+        )
+        await session.commit()
+    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/resources/{resource_id}/delete")
+async def delete_resource_action(
+    resource_id: int,
+    _: str = Depends(require_admin),
+) -> RedirectResponse:
+    async with async_session() as session:
+        await delete_resource(session, resource_id)
+        await session.commit()
+    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/users")
+async def admin_users(request: Request, _: str = Depends(require_admin)):
+    async with async_session() as session:
+        users = await list_users(session)
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {"request": request, "users": users},
+    )
+

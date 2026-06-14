@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="toolbar">
+  <h1>{{ "编辑资源" if resource else "新增资源" }}</h1>
+  <a class="button secondary" href="/admin">返回</a>
+</div>
+<div class="form">
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="{{ action }}">
+    <label for="short_code">短码</label>
+    <input id="short_code" name="short_code" required maxlength="64" value="{{ resource.short_code if resource else '' }}">
+
+    <label for="title">标题</label>
+    <input id="title" name="title" value="{{ resource.title if resource else '' }}">
+
+    <label for="tags">标签</label>
+    <input id="tags" name="tags" placeholder="#清纯 #日本 #有码" value="{{ resource.tags if resource else '' }}">
+
+    <label for="file_type">文件类型</label>
+    <select id="file_type" name="file_type" required>
+      {% set current_type = resource.file_type if resource else 'video' %}
+      <option value="video" {% if current_type == 'video' %}selected{% endif %}>video</option>
+      <option value="photo" {% if current_type == 'photo' %}selected{% endif %}>photo</option>
+      <option value="document" {% if current_type == 'document' %}selected{% endif %}>document</option>
+    </select>
+
+    <label for="file_id">file_id</label>
+    <input id="file_id" name="file_id" required value="{{ resource.file_id if resource else '' }}">
+
+    <label for="caption">Caption</label>
+    <textarea id="caption" name="caption">{{ resource.caption if resource else '' }}</textarea>
+
+    <p>
+      <button class="button" type="submit">保存</button>
+    </p>
+  </form>
+</div>
+{% endblock %}
+

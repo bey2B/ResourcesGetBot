@@ -1,0 +1,2 @@
+"""ResourcesGetBot application package."""
+

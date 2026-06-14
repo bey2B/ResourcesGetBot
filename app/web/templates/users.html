@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="toolbar">
+  <h1>用户列表</h1>
+  <a class="button secondary" href="/admin">资源列表</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>user_id</th>
+      <th>username</th>
+      <th>first_name</th>
+      <th>加入时间</th>
+      <th>最后访问</th>
+      <th>下载次数</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for user in users %}
+    <tr>
+      <td>{{ user.user_id }}</td>
+      <td>{{ user.username }}</td>
+      <td>{{ user.first_name }}</td>
+      <td>{{ user.joined_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ user.last_seen_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ user.download_count }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="6" class="muted">暂无用户</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
+
