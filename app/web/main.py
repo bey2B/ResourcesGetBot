@@ -20,6 +20,10 @@ from app.repositories import (
     list_resources,
     list_users,
     update_resource,
+    get_total_users,
+    get_daily_user_registrations,
+    get_daily_downloads,
+    get_daily_active_users,
 )
 
 
@@ -91,6 +95,10 @@ async def create_resource_action(
     short_code: str = Form(...),
     title: str = Form(""),
     tags: str = Form(""),
+    author: str = Form(""),
+    quality: str = Form(""),
+    mosaic_status: str = Form(""),
+    video_direction: str = Form(""),
     file_id: str = Form(...),
     file_type: str = Form(...),
     caption: str = Form(""),
@@ -115,6 +123,10 @@ async def create_resource_action(
                 short_code=short_code,
                 title=title or short_code,
                 tags=tags,
+                author=author or None,
+                quality=quality or None,
+                mosaic_status=mosaic_status or None,
+                video_direction=video_direction or None,
                 file_id=file_id,
                 file_type=file_type,
                 caption=caption,
@@ -166,6 +178,10 @@ async def edit_resource_action(
     short_code: str = Form(...),
     title: str = Form(""),
     tags: str = Form(""),
+    author: str = Form(""),
+    quality: str = Form(""),
+    mosaic_status: str = Form(""),
+    video_direction: str = Form(""),
     file_id: str = Form(...),
     file_type: str = Form(...),
     caption: str = Form(""),
@@ -196,6 +212,10 @@ async def edit_resource_action(
             short_code=short_code,
             title=title or short_code,
             tags=tags,
+            author=author or None,
+            quality=quality or None,
+            mosaic_status=mosaic_status or None,
+            video_direction=video_direction or None,
             file_id=file_id,
             file_type=file_type,
             caption=caption,
@@ -213,6 +233,30 @@ async def delete_resource_action(
         await delete_resource(session, resource_id)
         await session.commit()
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+
+
+
+@app.get("/admin/stats")
+async def admin_stats(request: Request, _: str = Depends(require_admin)):
+    return templates.TemplateResponse(
+        request, "stats.html",
+        {"request": request},
+    )
+
+
+@app.get("/admin/stats/data")
+async def admin_stats_data(_: str = Depends(require_admin)):
+    async with async_session() as session:
+        total_users = await get_total_users(session)
+        daily_registrations = await get_daily_user_registrations(session)
+        daily_downloads = await get_daily_downloads(session)
+        daily_active_users = await get_daily_active_users(session)
+    return {
+        "total_users": total_users,
+        "daily_registrations": daily_registrations,
+        "daily_downloads": daily_downloads,
+        "daily_active_users": daily_active_users,
+    }
 
 
 @app.get("/admin/users")

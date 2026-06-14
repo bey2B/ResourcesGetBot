@@ -9,9 +9,12 @@
     <tr>
       <th>短码</th>
       <th>标题</th>
+      <th>作者</th>
       <th>标签</th>
+      <th>清晰度</th>
+      <th>马赛克</th>
+      <th>方向</th>
       <th>类型</th>
-      <th>file_id</th>
       <th>添加时间</th>
       <th>操作</th>
     </tr>
@@ -21,9 +24,12 @@
     <tr>
       <td><strong>{{ resource.short_code }}</strong></td>
       <td>{{ resource.title }}</td>
+      <td>{{ resource.author or '-' }}</td>
       <td>{{ resource.tags }}</td>
+      <td>{{ resource.quality or '-' }}</td>
+      <td>{{ resource.mosaic_status or '-' }}</td>
+      <td>{{ resource.video_direction or '-' }}</td>
       <td>{{ resource.file_type }}</td>
-      <td><code title="{{ resource.file_id }}">{{ resource.file_id }}</code></td>
       <td>{{ resource.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
       <td>
         <a class="button secondary" href="/admin/resources/{{ resource.id }}/edit">编辑</a>
@@ -34,7 +40,7 @@
     </tr>
     {% else %}
     <tr>
-      <td colspan="7" class="muted">暂无资源</td>
+      <td colspan="10" class="muted">暂无资源</td>
     </tr>
     {% endfor %}
   </tbody>

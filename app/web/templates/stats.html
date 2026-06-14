@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="toolbar">
+  <h1>\u7edf\u8ba1</h1>
+</div>
+
+<div class="stat-cards">
+  <div class="stat-card">
+    <div class="stat-number" id="totalUsers">-</div>
+    <div class="stat-label">\u603b\u7528\u6237\u6570</div>
+  </div>
+</div>
+
+<div class="chart-container">
+  <h2>\u6bcf\u65e5\u6ce8\u518c\u7528\u6237</h2>
+  <canvas id="regChart"></canvas>
+</div>
+
+<div class="chart-container">
+  <h2>\u6bcf\u65e5\u4e0b\u8f7d\u6b21\u6570</h2>
+  <canvas id="dlChart"></canvas>
+</div>
+
+<div class="chart-container">
+  <h2>\u6bcf\u65e5\u6d3b\u8dc3\u7528\u6237</h2>
+  <canvas id="activeChart"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+fetch('/admin/stats/data')
+  .then(r => r.json())
+  .then(data => {
+    document.getElementById('totalUsers').textContent = data.total_users;
+
+    function makeChart(canvasId, label, data, color) {
+      new Chart(document.getElementById(canvasId), {
+        type: 'line',
+        data: {
+          labels: data.map(d => d.date),
+          datasets: [{
+            label: label,
+            data: data.map(d => d.count),
+            borderColor: color,
+            backgroundColor: color + '33',
+            fill: true,
+            tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { maxRotation: 45 } },
+            y: { beginAtZero: true, ticks: { stepSize: 1 } }
+          }
+        }
+      });
+    }
+
+    makeChart('regChart', '\u6ce8\u518c\u7528\u6237', data.daily_registrations, '#0b69a3');
+    makeChart('dlChart', '\u4e0b\u8f7d\u6b21\u6570', data.daily_downloads, '#2bb673');
+    makeChart('activeChart', '\u6d3b\u8dc3\u7528\u6237', data.daily_active_users, '#ba2525');
+  });
+</script>
+
+<style>
+.stat-cards { display: flex; gap: 18px; margin-bottom: 24px; }
+.stat-card {
+  background: white; border: 1px solid #d9e2ec; border-radius: 8px;
+  padding: 20px 28px; text-align: center; min-width: 160px;
+}
+.stat-number { font-size: 36px; font-weight: 700; color: #102a43; }
+.stat-label { font-size: 14px; color: #627d98; margin-top: 4px; }
+.chart-container {
+  background: white; border: 1px solid #d9e2ec; border-radius: 8px;
+  padding: 18px; margin-bottom: 20px;
+}
+.chart-container h2 { font-size: 16px; margin: 0 0 12px; color: #334e68; }
+canvas { max-height: 300px; }
+</style>
+{% endblock %}

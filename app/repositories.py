@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram.types import User as TelegramUser
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DownloadLog, Resource, User, utc_now
@@ -129,6 +129,38 @@ async def count_recent_downloads(
         )
     )
     return int(result.scalar_one())
+
+
+async def get_total_users(session: AsyncSession) -> int:
+    result = await session.execute(select(func.count(User.user_id)))
+    return result.scalar_one() or 0
+
+
+async def get_daily_user_registrations(session: AsyncSession, days: int = 30) -> list[dict]:
+    since = utc_now() - timedelta(days=days)
+    rows = await session.execute(
+        text("SELECT DATE(joined_at) as date, COUNT(*) as count FROM users WHERE joined_at >= :since GROUP BY date ORDER BY date"),
+        {"since": since}
+    )
+    return [{"date": str(r[0]), "count": r[1]} for r in rows.all()]
+
+
+async def get_daily_downloads(session: AsyncSession, days: int = 30) -> list[dict]:
+    since = utc_now() - timedelta(days=days)
+    rows = await session.execute(
+        text("SELECT DATE(created_at) as date, COUNT(*) as count FROM download_logs WHERE created_at >= :since GROUP BY date ORDER BY date"),
+        {"since": since}
+    )
+    return [{"date": str(r[0]), "count": r[1]} for r in rows.all()]
+
+
+async def get_daily_active_users(session: AsyncSession, days: int = 30) -> list[dict]:
+    since = utc_now() - timedelta(days=days)
+    rows = await session.execute(
+        text("SELECT DATE(created_at) as date, COUNT(DISTINCT user_id) as count FROM download_logs WHERE created_at >= :since GROUP BY date ORDER BY date"),
+        {"since": since}
+    )
+    return [{"date": str(r[0]), "count": r[1]} for r in rows.all()]
 
 
 async def log_download(session: AsyncSession, *, user: User, resource: Resource) -> None:

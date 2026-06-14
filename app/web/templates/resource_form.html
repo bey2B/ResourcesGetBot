@@ -17,6 +17,34 @@
 
     <label for="tags">标签</label>
     <input id="tags" name="tags" placeholder="#清纯 #日本 #有码" value="{{ resource.tags if resource else '' }}">
+    <label for="author">作者/Author</label>
+    <input id="author" name="author" value="{{ resource.author if resource else '' }}" placeholder="AuthorName">
+
+    <label for="quality">清晰度/质量</label>
+    <select id="quality" name="quality">
+      <option value="">未设置</option>
+      <option value="4K" {{ 'selected' if resource and resource.quality == '4K' else '' }}>4K</option>
+      <option value="1080+" {{ 'selected' if resource and resource.quality == '1080+' else '' }}>1080+</option>
+      <option value="1080P" {{ 'selected' if resource and resource.quality == '1080P' else '' }}>1080P</option>
+      <option value="720P" {{ 'selected' if resource and resource.quality == '720P' else '' }}>720P</option>
+      <option value="480P" {{ 'selected' if resource and resource.quality == '480P' else '' }}>480P</option>
+    </select>
+
+    <label for="mosaic_status">马赛克/Reviewed</label>
+    <select id="mosaic_status" name="mosaic_status">
+      <option value="">未设置</option>
+      <option value="有码" {{ 'selected' if resource and resource.mosaic_status == '有码' else '' }}>有码</option>
+      <option value="无码" {{ 'selected' if resource and resource.mosaic_status == '无码' else '' }}>无码</option>
+      <option value="无码修复" {{ 'selected' if resource and resource.mosaic_status == '无码修复' else '' }}>无码修复</option>
+    </select>
+
+    <label for="video_direction">视频方向/Video Direction</label>
+    <select id="video_direction" name="video_direction">
+      <option value="">未设置</option>
+      <option value="竖屏" {{ 'selected' if resource and resource.video_direction == '竖屏' else '' }}>竖屏</option>
+      <option value="横屏" {{ 'selected' if resource and resource.video_direction == '横屏' else '' }}>横屏</option>
+    </select>
+
 
     <label for="file_type">文件类型</label>
     <select id="file_type" name="file_type" required>
