@@ -1,0 +1,35 @@
+{
+  "name": "cua-super-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cua 超级助手 Telegram Bot（Cloudflare Workers + grammY + D1）",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "build:admin": "npm --prefix admin install && npm --prefix admin run build",
+    "build": "npm run typecheck && npm run build:admin && wrangler deploy --dry-run",
+    "deploy:bot": "npm run typecheck && wrangler deploy",
+    "deploy:admin": "npm run typecheck && npm run build:admin && wrangler deploy -c wrangler.admin.toml",
+    "deploy": "npm run deploy:bot && npm run deploy:admin",
+    "test": "vitest run",
+    "db:local": "wrangler d1 execute cua-super-bot-db --local --file=src/db/schema.sql",
+    "db:remote": "wrangler d1 execute cua-super-bot-db --remote --file=src/db/schema.sql",
+    "db:migrate": "wrangler d1 migrations apply cua-super-bot-db"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "grammy": "^1.45.1",
+    "jose": "^6.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260808.1",
+    "tsx": "^4.23.11",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.120.0"
+  }
+}

@@ -1,0 +1,19 @@
+name = "cua-super-bot"
+main = "src/index.ts"
+compatibility_date = "2026-08-08"
+
+routes = [
+  { pattern = "cua.bey2b.dpdns.org", zone_name = "bey2b.dpdns.org", custom_domain = true },
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cua-super-bot-db"
+database_id = "3e1806dc-4da8-459b-943c-3664f26a1c25"
+
+[triggers]
+crons = [
+  "0 0 * * *",
+  "*/15 * * * *",
+  "30 0 * * *",
+]
