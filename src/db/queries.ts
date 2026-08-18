@@ -70,6 +70,16 @@ export interface ResourceRow {
   updated_at: string;
 }
 
+export interface ResourceFileRow {
+  id: number;
+  resource_id: number;
+  file_id: string;
+  file_unique_id: string | null;
+  media_type: string;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface DownloadRow {
   id: number;
   user_id: number;
@@ -78,6 +88,14 @@ export interface DownloadRow {
   title: string;
   short_code: string;
   username: string | null;
+}
+
+export interface PurchaseRow {
+  id: number;
+  user_id: number;
+  resource_id: number;
+  price: number;
+  created_at: string;
 }
 
 export interface CheckinRow {
@@ -121,6 +139,23 @@ export interface AdRow {
   content: string;
   weight: number;
   enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdButton {
+  text: string;
+  url: string;
+}
+
+export interface AdMessageRow {
+  id: number;
+  ad_id: number;
+  text: string;
+  media_file_id: string | null;
+  media_unique_id: string | null;
+  media_type: string;
+  buttons: string;
   created_at: string;
   updated_at: string;
 }
@@ -371,6 +406,8 @@ export interface ResourceCreateInput {
   fileId: string;
   fileUniqueId?: string | null;
   fileIds?: string[];
+  /** 可选：写入 resource_files 时携带 media_type，供 album 模式识别 photo/video。 */
+  files?: ResourceFileInput[];
   title?: string;
   tags?: string;
   isPaid?: boolean;
@@ -383,6 +420,8 @@ export interface ResourceUpdateInput {
   fileId?: string;
   fileUniqueId?: string | null;
   fileIds?: string[];
+  /** 可选：更新 resource_files 时携带 media_type，供 album 模式识别 photo/video。 */
+  files?: ResourceFileInput[];
   title?: string;
   tags?: string;
   isPaid?: boolean;
@@ -426,9 +465,10 @@ function buildResourceFilter(options: { keyword?: string; tag?: string; isPaid?:
 
 export async function createResource(db: D1Database, input: ResourceCreateInput): Promise<ResourceRow> {
   const now = utcNow();
-  const fileIds = JSON.stringify(
-    input.fileIds?.length ? input.fileIds : [input.fileId],
-  );
+  const fileList =
+    input.files?.map((file) => file.fileId) ??
+    (input.fileIds?.length ? input.fileIds : [input.fileId]);
+  const fileIds = JSON.stringify(fileList);
   // 序号在 SQL 内取当前最大值 +1，保证从 0 开始且不重复
   const result = await db
     .prepare(
@@ -457,6 +497,12 @@ export async function createResource(db: D1Database, input: ResourceCreateInput)
   if (!row) {
     throw new Error('创建资源后读取失败');
   }
+  const resourceFiles = input.files ?? fileList.map((fileId, index) => ({ fileId, sortOrder: index }));
+  await addResourceFiles(
+    db,
+    row.id,
+    resourceFiles,
+  );
   return row;
 }
 
@@ -517,6 +563,11 @@ export async function updateResource(
 ): Promise<ResourceRow | null> {
   const sets: string[] = [];
   const values: (string | number | boolean | null)[] = [];
+  const fileRows =
+    patch.files ??
+    (patch.fileIds !== undefined
+      ? patch.fileIds.map((fileId, index) => ({ fileId, sortOrder: index }))
+      : null);
   if (patch.shortCode !== undefined) {
     sets.push('short_code = ?');
     values.push(patch.shortCode);
@@ -529,7 +580,15 @@ export async function updateResource(
     sets.push('file_unique_id = ?');
     values.push(patch.fileUniqueId);
   }
-  if (patch.fileIds !== undefined) {
+  if (patch.files !== undefined) {
+    const fileIds = patch.files.map((file) => file.fileId);
+    if (patch.fileId === undefined) {
+      sets.push('file_id = ?');
+      values.push(fileIds[0] ?? '');
+    }
+    sets.push('file_ids = ?');
+    values.push(JSON.stringify(fileIds));
+  } else if (patch.fileIds !== undefined) {
     sets.push('file_ids = ?');
     values.push(JSON.stringify(patch.fileIds));
   }
@@ -550,7 +609,11 @@ export async function updateResource(
     values.push(patch.price);
   }
   if (sets.length === 0) {
-    return getResourceById(db, resourceId);
+    const row = await getResourceById(db, resourceId);
+    if (row && fileRows) {
+      await replaceResourceFiles(db, resourceId, fileRows);
+    }
+    return row;
   }
   sets.push('updated_at = ?');
   values.push(utcNow());
@@ -558,7 +621,13 @@ export async function updateResource(
     .prepare(`UPDATE resources SET ${sets.join(', ')} WHERE id = ?`)
     .bind(...values, resourceId)
     .run();
-  return result.meta.changes > 0 ? getResourceById(db, resourceId) : null;
+  if (result.meta.changes === 0) {
+    return null;
+  }
+  if (fileRows) {
+    await replaceResourceFiles(db, resourceId, fileRows);
+  }
+  return getResourceById(db, resourceId);
 }
 
 export async function deleteResource(db: D1Database, resourceId: number): Promise<boolean> {
@@ -582,6 +651,123 @@ export async function getNextResourceSequence(db: D1Database): Promise<number> {
     .prepare('SELECT COALESCE(MAX(sequence), -1) + 1 AS next_sequence FROM resources')
     .first<{ next_sequence: number }>();
   return row?.next_sequence ?? 0;
+}
+
+// ---------- 资源文件 ----------
+
+export interface ResourceFileInput {
+  fileId: string;
+  fileUniqueId?: string | null;
+  mediaType?: string;
+  sortOrder?: number;
+}
+
+export async function addResourceFiles(
+  db: D1Database,
+  resourceId: number,
+  files: ResourceFileInput[],
+): Promise<ResourceFileRow[]> {
+  if (files.length === 0) {
+    return [];
+  }
+  const now = utcNow();
+  const statements = files.map((file, index) =>
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO resource_files
+           (resource_id, file_id, file_unique_id, media_type, sort_order, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        resourceId,
+        file.fileId,
+        file.fileUniqueId ?? null,
+        file.mediaType ?? '',
+        file.sortOrder ?? index,
+        now,
+      ),
+  );
+  await db.batch(statements);
+  return listResourceFiles(db, resourceId);
+}
+
+export async function replaceResourceFiles(
+  db: D1Database,
+  resourceId: number,
+  files: ResourceFileInput[],
+): Promise<ResourceFileRow[]> {
+  await db.prepare('DELETE FROM resource_files WHERE resource_id = ?').bind(resourceId).run();
+  return addResourceFiles(db, resourceId, files);
+}
+
+export async function listResourceFiles(
+  db: D1Database,
+  resourceId: number,
+): Promise<ResourceFileRow[]> {
+  const result = await db
+    .prepare(
+      'SELECT * FROM resource_files WHERE resource_id = ? ORDER BY sort_order ASC, id ASC',
+    )
+    .bind(resourceId)
+    .all<ResourceFileRow>();
+  return result.results;
+}
+
+export async function countResourceFiles(db: D1Database, resourceId: number): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS count FROM resource_files WHERE resource_id = ?')
+    .bind(resourceId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
+export async function countResourceFilesByResourceIds(
+  db: D1Database,
+  resourceIds: number[],
+): Promise<Record<number, number>> {
+  if (resourceIds.length === 0) {
+    return {};
+  }
+  const placeholders = resourceIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT resource_id, COUNT(*) AS count
+       FROM resource_files
+       WHERE resource_id IN (${placeholders})
+       GROUP BY resource_id`,
+    )
+    .bind(...resourceIds)
+    .all<{ resource_id: number; count: number }>();
+  return Object.fromEntries(
+    result.results.map((row) => [row.resource_id, Number(row.count ?? 0)]),
+  );
+}
+
+export async function getResourceFilesByFileId(
+  db: D1Database,
+  fileId: string,
+): Promise<ResourceFileRow[]> {
+  const result = await db
+    .prepare(
+      'SELECT * FROM resource_files WHERE file_id = ? ORDER BY resource_id ASC, sort_order ASC, id ASC',
+    )
+    .bind(fileId)
+    .all<ResourceFileRow>();
+  return result.results;
+}
+
+export async function getResourceByFileId(
+  db: D1Database,
+  fileId: string,
+): Promise<ResourceRow | null> {
+  return db
+    .prepare(
+      `SELECT r.* FROM resources r
+       INNER JOIN resource_files rf ON rf.resource_id = r.id
+       WHERE rf.file_id = ? ORDER BY rf.sort_order ASC, rf.id ASC LIMIT 1`,
+    )
+    .bind(fileId)
+    .first<ResourceRow>();
 }
 
 // ---------- 下载记录 ----------
@@ -736,6 +922,97 @@ export async function getUserPurchasedResources(
     .bind(userId)
     .all<ResourceRow>();
   return result.results;
+}
+
+// ---------- 购买记录 ----------
+
+export interface PurchaseCreateInput {
+  userId: number;
+  resourceId: number;
+  price: number;
+  createdAt?: string;
+}
+
+export interface PurchasedResourceListOptions {
+  page?: number;
+  pageSize?: number;
+}
+
+export async function createPurchase(
+  db: D1Database,
+  input: PurchaseCreateInput,
+): Promise<PurchaseRow> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO purchases (user_id, resource_id, price, created_at)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(input.userId, input.resourceId, input.price, input.createdAt ?? utcNow())
+    .run();
+  const row = await db
+    .prepare('SELECT * FROM purchases WHERE user_id = ? AND resource_id = ?')
+    .bind(input.userId, input.resourceId)
+    .first<PurchaseRow>();
+  if (!row) {
+    throw new Error('创建购买记录后读取失败');
+  }
+  return row;
+}
+
+export async function getPurchase(
+  db: D1Database,
+  userId: number,
+  resourceId: number,
+): Promise<PurchaseRow | null> {
+  return db
+    .prepare('SELECT * FROM purchases WHERE user_id = ? AND resource_id = ?')
+    .bind(userId, resourceId)
+    .first<PurchaseRow>();
+}
+
+export async function hasPurchased(
+  db: D1Database,
+  userId: number,
+  resourceId: number,
+): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS found FROM purchases WHERE user_id = ? AND resource_id = ? LIMIT 1')
+    .bind(userId, resourceId)
+    .first<{ found: number }>();
+  return row !== null;
+}
+
+export async function listPurchasedResources(
+  db: D1Database,
+  userId: number,
+  options: PurchasedResourceListOptions = {},
+): Promise<ResourceRow[]> {
+  const page = Math.max(options.page ?? 1, 1);
+  const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 200);
+  const offset = (page - 1) * pageSize;
+  const result = await db
+    .prepare(
+      `SELECT r.* FROM purchases p
+       INNER JOIN resources r ON r.id = p.resource_id
+       WHERE p.user_id = ? AND r.is_paid = 1
+       ORDER BY r.sequence ASC, r.id ASC
+       LIMIT ? OFFSET ?`,
+    )
+    .bind(userId, pageSize, offset)
+    .all<ResourceRow>();
+  return result.results;
+}
+
+export async function countPurchasedResources(db: D1Database, userId: number): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM purchases p
+       INNER JOIN resources r ON r.id = p.resource_id
+       WHERE p.user_id = ? AND r.is_paid = 1`,
+    )
+    .bind(userId)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
 }
 
 // ---------- 签到 ----------
@@ -1155,6 +1432,202 @@ export async function getRandomAdByPosition(
     }
   }
   return ads[ads.length - 1] ?? null;
+}
+
+// ---------- 广告消息 ----------
+
+export interface AdMessageInput {
+  text?: string;
+  mediaFileId?: string | null;
+  mediaUniqueId?: string | null;
+  mediaType?: string;
+  buttons?: AdButton[];
+}
+
+export function parseAdButtons(raw: string | null | undefined): AdButton[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter(
+        (item): item is AdButton =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as AdButton).text === 'string' &&
+          (item as AdButton).text.length > 0 &&
+          typeof (item as AdButton).url === 'string' &&
+          (item as AdButton).url.length > 0,
+      )
+      .map((item) => ({ text: item.text, url: item.url }));
+  } catch {
+    return [];
+  }
+}
+
+export async function saveAdMessage(
+  db: D1Database,
+  adId: number,
+  input: AdMessageInput = {},
+): Promise<AdMessageRow> {
+  const now = utcNow();
+  await db
+    .prepare(
+      `INSERT INTO ad_messages
+         (ad_id, text, media_file_id, media_unique_id, media_type, buttons, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(ad_id) DO UPDATE SET
+         text = excluded.text,
+         media_file_id = excluded.media_file_id,
+         media_unique_id = excluded.media_unique_id,
+         media_type = excluded.media_type,
+         buttons = excluded.buttons,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(
+      adId,
+      input.text ?? '',
+      input.mediaFileId ?? null,
+      input.mediaUniqueId ?? null,
+      input.mediaType ?? '',
+      JSON.stringify(input.buttons ?? []),
+      now,
+      now,
+    )
+    .run();
+  const row = await getAdMessage(db, adId);
+  if (!row) {
+    throw new Error('保存广告消息后读取失败');
+  }
+  return row;
+}
+
+export async function getAdMessage(db: D1Database, adId: number): Promise<AdMessageRow | null> {
+  return db.prepare('SELECT * FROM ad_messages WHERE ad_id = ?').bind(adId).first<AdMessageRow>();
+}
+
+export async function getAdMessageButtons(db: D1Database, adId: number): Promise<AdButton[]> {
+  const message = await getAdMessage(db, adId);
+  return parseAdButtons(message?.buttons);
+}
+
+export async function listAdMessagesByAdIds(
+  db: D1Database,
+  adIds: number[],
+): Promise<AdMessageRow[]> {
+  if (adIds.length === 0) {
+    return [];
+  }
+  const placeholders = adIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT * FROM ad_messages
+       WHERE ad_id IN (${placeholders})
+       ORDER BY ad_id ASC`,
+    )
+    .bind(...adIds)
+    .all<AdMessageRow>();
+  return result.results;
+}
+
+export interface AdMessageUpdateInput {
+  text?: string;
+  mediaFileId?: string | null;
+  mediaUniqueId?: string | null;
+  mediaType?: string;
+  buttons?: AdButton[];
+}
+
+/** 局部更新 ad_messages：仅在传入字段时写入，避免覆盖未修改的广告内容。 */
+export async function updateAdMessage(
+  db: D1Database,
+  adId: number,
+  patch: AdMessageUpdateInput,
+): Promise<AdMessageRow | null> {
+  const existing = await getAdMessage(db, adId);
+  const now = utcNow();
+  if (!existing) {
+    await db
+      .prepare(
+        `INSERT INTO ad_messages
+           (ad_id, text, media_file_id, media_unique_id, media_type, buttons, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        adId,
+        patch.text ?? '',
+        patch.mediaFileId ?? null,
+        patch.mediaUniqueId ?? null,
+        patch.mediaType ?? '',
+        JSON.stringify(patch.buttons ?? []),
+        now,
+        now,
+      )
+      .run();
+    return getAdMessage(db, adId);
+  }
+
+  const sets: string[] = [];
+  const values: (string | number | boolean | null)[] = [];
+  if (patch.text !== undefined) {
+    sets.push('text = ?');
+    values.push(patch.text);
+  }
+  if (patch.mediaFileId !== undefined) {
+    sets.push('media_file_id = ?');
+    values.push(patch.mediaFileId);
+  }
+  if (patch.mediaUniqueId !== undefined) {
+    sets.push('media_unique_id = ?');
+    values.push(patch.mediaUniqueId);
+  }
+  if (patch.mediaType !== undefined) {
+    sets.push('media_type = ?');
+    values.push(patch.mediaType);
+  }
+  if (patch.buttons !== undefined) {
+    sets.push('buttons = ?');
+    values.push(JSON.stringify(patch.buttons));
+  }
+  if (sets.length === 0) {
+    return existing;
+  }
+  sets.push('updated_at = ?');
+  values.push(now);
+  await db
+    .prepare(`UPDATE ad_messages SET ${sets.join(', ')} WHERE ad_id = ?`)
+    .bind(...values, adId)
+    .run();
+  return getAdMessage(db, adId);
+}
+
+export async function setAdMessageButtons(
+  db: D1Database,
+  adId: number,
+  buttons: AdButton[],
+): Promise<AdButton[]> {
+  const now = utcNow();
+  await db
+    .prepare(
+      `INSERT INTO ad_messages
+         (ad_id, text, media_file_id, media_unique_id, media_type, buttons, created_at, updated_at)
+       VALUES (?, '', NULL, NULL, '', ?, ?, ?)
+       ON CONFLICT(ad_id) DO UPDATE SET
+         buttons = excluded.buttons,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(adId, JSON.stringify(buttons), now, now)
+    .run();
+  return buttons;
+}
+
+export async function deleteAdMessage(db: D1Database, adId: number): Promise<boolean> {
+  const result = await db.prepare('DELETE FROM ad_messages WHERE ad_id = ?').bind(adId).run();
+  return result.meta.changes > 0;
 }
 
 // ---------- 系统设置 ----------

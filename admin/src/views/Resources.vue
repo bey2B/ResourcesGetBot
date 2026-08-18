@@ -295,19 +295,20 @@ function parseFileIdsText(raw: string): string {
             </button>
           </th>
           <th class="th-cell">标签</th>
+          <th class="th-cell">文件数</th>
           <th class="th-cell text-right">操作</th>
         </template>
 
         <template v-if="state.loading">
           <tr>
-            <td colspan="8">
+            <td colspan="9">
               <Spinner label="正在加载资源" />
             </td>
           </tr>
         </template>
         <template v-else-if="state.error">
           <tr>
-            <td colspan="8">
+            <td colspan="9">
               <div class="flex flex-col items-center gap-2 py-10 text-center">
                 <p class="text-sm text-red-600">{{ state.error }}</p>
                 <Button variant="outline" @click="load">重试</Button>
@@ -317,7 +318,7 @@ function parseFileIdsText(raw: string): string {
         </template>
         <template v-else-if="state.items.length === 0">
           <tr>
-            <td colspan="8">
+            <td colspan="9">
               <EmptyState :icon="Inbox" title="暂无资源" description="点击右上角「新增资源」创建第一个资源" />
             </td>
           </tr>
@@ -339,14 +340,6 @@ function parseFileIdsText(raw: string): string {
               <span class="block truncate">{{ item.title || '未命名资源' }}</span>
             </td>
             <td class="td-cell">
-              <div class="flex max-w-[220px] flex-wrap gap-1">
-                <Badge v-for="tag in tagList(item.tags)" :key="tag" variant="neutral">
-                  {{ tag }}
-                </Badge>
-                <span v-if="!tagList(item.tags).length" class="text-xs text-slate-300">—</span>
-              </div>
-            </td>
-            <td class="td-cell">
               <Badge :variant="item.is_paid === 1 ? 'warning' : 'success'">
                 {{ item.is_paid === 1 ? `${formatNumber(item.price)} 积分` : '免费' }}
               </Badge>
@@ -356,6 +349,17 @@ function parseFileIdsText(raw: string): string {
             </td>
             <td class="td-cell whitespace-nowrap text-slate-500">
               {{ formatDateTime(item.created_at) }}
+            </td>
+            <td class="td-cell">
+              <div class="flex max-w-[220px] flex-wrap gap-1">
+                <Badge v-for="tag in tagList(item.tags)" :key="tag" variant="neutral">
+                  {{ tag }}
+                </Badge>
+                <span v-if="!tagList(item.tags).length" class="text-xs text-slate-300">—</span>
+              </div>
+            </td>
+            <td class="td-cell tabular-nums text-slate-600">
+              {{ formatNumber(item.file_count ?? 1) }}
             </td>
             <td class="td-cell">
               <div class="flex items-center justify-end gap-1">

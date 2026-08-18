@@ -3,23 +3,24 @@
  */
 
 import type { Bot } from 'grammy';
-import { InputMediaBuilder } from 'grammy';
 import {
   getResourceByShortCode,
-  getSetting,
   hasDownloaded,
   recordDownload,
   recordDownloadIfAbsent,
   upsertUser,
 } from '../db/queries';
-import { getAdForPosition } from '../services/ads';
+import { sendAdForPosition } from '../services/ads';
+import { deliverResource } from '../services/delivery';
 import { consumeRateLimit } from '../services/rate-limit';
 import { purchaseResource } from '../services/points';
 import { checkForceSubscribe } from '../services/subscription';
-import type { Resource, User } from '../types';
-import { AppError, errorMessage, parseBoolean } from '../utils/helpers';
+import type { AdPosition, Resource, User } from '../types';
+import { AppError, errorMessage } from '../utils/helpers';
 import { isValidShortCode } from '../utils/shortcode';
 import type { BotContext } from '../bot';
+
+export { parseResourceFileIds } from '../services/delivery';
 
 export const MESSAGE_BLOCK_ENABLED_KEY = 'message_block_enabled';
 
@@ -114,25 +115,6 @@ async function replyAndTrack(
   messageIds.push(message.message_id);
 }
 
-export function parseResourceFileIds(resource: Resource): string[] {
-  if (resource.file_ids?.trim()) {
-    try {
-      const parsed = JSON.parse(resource.file_ids) as unknown;
-      if (Array.isArray(parsed)) {
-        const ids = parsed
-          .map((item) => (typeof item === 'string' ? item.trim() : ''))
-          .filter((item) => item.length > 0);
-        if (ids.length > 0) {
-          return [...new Set(ids)];
-        }
-      }
-    } catch {
-      // file_ids 损坏时回退到 file_id 单文件发送
-    }
-  }
-  return [resource.file_id];
-}
-
 export function buildResourceCaption(
   resource: Resource,
   topAdContent?: string,
@@ -167,86 +149,12 @@ export function buildResourceCaption(
 
 export type FileBlockMode = 'single' | 'separate' | 'media_group';
 
-/** 消息块策略：单文件始终单发；多文件时按“一个文件一个消息块”开关决定拆分或合并。 */
+/** 旧消息块策略，保留给现有测试与 settings 兼容；U3 起投递统一走 services/delivery。 */
 export function decideFileBlockMode(fileCount: number, oneFilePerBlock: boolean): FileBlockMode {
   if (fileCount <= 1) {
     return 'single';
   }
   return oneFilePerBlock ? 'separate' : 'media_group';
-}
-
-/**
- * 数据库只保存 file_id，不区分媒体类型，因此按常见类型逐类尝试发送。
- * 真实场景下首次尝试即命中对应类型，失败回退不会影响已有流程。
- */
-async function sendFileId(ctx: BotContext, fileId: string, caption?: string): Promise<number> {
-  const chatId = requireChatId(ctx);
-  const captionOptions = caption ? { caption } : undefined;
-  const attempts: Array<() => Promise<{ message_id: number }>> = [
-    () => ctx.api.sendDocument(chatId, fileId, captionOptions),
-    () => ctx.api.sendPhoto(chatId, fileId, captionOptions),
-    () => ctx.api.sendVideo(chatId, fileId, captionOptions),
-    () => ctx.api.sendAnimation(chatId, fileId, captionOptions),
-    () => ctx.api.sendAudio(chatId, fileId, captionOptions),
-    () => ctx.api.sendVoice(chatId, fileId, captionOptions),
-    () => ctx.api.sendVideoNote(chatId, fileId),
-    () => ctx.api.sendSticker(chatId, fileId),
-  ];
-  let lastError: unknown = null;
-  for (const attempt of attempts) {
-    try {
-      const message = await attempt();
-      return message.message_id;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw new AppError(`资源文件发送失败，请稍后重试或联系管理员。（${errorMessage(lastError)}）`);
-}
-
-export async function sendResourceFiles(
-  ctx: BotContext,
-  fileIds: readonly string[],
-  caption?: string,
-): Promise<number[]> {
-  const files = fileIds.filter((fileId) => typeof fileId === 'string' && fileId.trim().length > 0);
-  if (files.length === 0) {
-    throw new AppError('资源文件缺失，请稍后重试或联系管理员', 500, 'RESOURCE_FILE_MISSING');
-  }
-  const oneFilePerBlock = parseBoolean(
-    await getSetting(ctx.env.DB, MESSAGE_BLOCK_ENABLED_KEY),
-    false,
-  );
-  const mode = decideFileBlockMode(files.length, oneFilePerBlock);
-  if (mode === 'single' || mode === 'separate') {
-    const messageIds: number[] = [];
-    for (let index = 0; index < files.length; index += 1) {
-      messageIds.push(
-        await sendFileId(ctx, files[index], index === 0 ? caption : undefined),
-      );
-    }
-    return messageIds;
-  }
-
-  // 合并消息块：统一按 document 组装媒体组，失败时退回逐条发送。
-  try {
-    const media = files.map((fileId, index) =>
-      InputMediaBuilder.document(
-        fileId,
-        index === 0 && caption ? { caption } : {},
-      ),
-    );
-    const messages = await ctx.api.sendMediaGroup(requireChatId(ctx), media);
-    return messages.map((message) => message.message_id);
-  } catch {
-    const messageIds: number[] = [];
-    for (let index = 0; index < files.length; index += 1) {
-      messageIds.push(
-        await sendFileId(ctx, files[index], index === 0 ? caption : undefined),
-      );
-    }
-    return messageIds;
-  }
 }
 
 export async function handleResourceRequest(
@@ -328,17 +236,32 @@ export async function handleResourceRequest(
       return { delivered: false, messageIds };
   }
 
-  const [topAd, bottomAd] = await Promise.all([
-    getAdForPosition(db, 'top'),
-    getAdForPosition(db, 'bottom'),
-  ]);
-  const fileMessageIds = await sendResourceFiles(
-    ctx,
-    parseResourceFileIds(resource),
-    buildResourceCaption(resource, topAd?.content, bottomAd?.content),
-  );
-  messageIds.push(...fileMessageIds);
+  const chatId = requireChatId(ctx);
+  await sendIndependentAd(ctx, chatId, 'top', messageIds);
+  const delivery = await deliverResource(ctx.api, chatId, resource, {
+    db,
+    caption: buildResourceCaption(resource),
+  });
+  messageIds.push(...delivery.messageIds);
+  await sendIndependentAd(ctx, chatId, 'bottom', messageIds);
   return { delivered: true, messageIds };
+}
+
+/** 广告位独立消息发送失败时不阻断资源投递，只记录日志。 */
+async function sendIndependentAd(
+  ctx: BotContext,
+  chatId: number,
+  position: AdPosition,
+  messageIds: number[],
+): Promise<void> {
+  try {
+    const messageId = await sendAdForPosition(ctx.api, ctx.env.DB, chatId, position);
+    if (messageId !== null) {
+      messageIds.push(messageId);
+    }
+  } catch (err) {
+    console.error(`[ad-send] ${position}`, errorMessage(err));
+  }
 }
 
 export function registerResourceHandlers(bot: Bot<BotContext>): void {

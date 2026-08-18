@@ -19,7 +19,8 @@ import Textarea from '@/components/ui/Textarea.vue';
 interface SettingField {
   key: string;
   label: string;
-  type: 'switch' | 'number' | 'textarea';
+  type: 'switch' | 'number' | 'textarea' | 'select';
+  options?: { label: string; value: string }[];
   placeholder?: string;
   description?: string;
   hint?: string;
@@ -70,6 +71,17 @@ const coreFields: SettingField[] = [
     defaultValue: '0',
   },
   {
+    key: 'resource_send_mode',
+    label: '资源发送模式',
+    type: 'select',
+    options: [
+      { label: '单独发送', value: 'single' },
+      { label: '消息块 Album', value: 'album' },
+    ],
+    description: '合集资源获取时逐条发送，或按 photo/video 组成消息块发送',
+    defaultValue: 'single',
+  },
+  {
     key: 'invite_reward_window_seconds',
     label: '邀请奖励窗口秒数',
     type: 'number',
@@ -96,9 +108,12 @@ const adFormError = ref('');
 const adForm = reactive({
   position: 'top' as 'top' | 'bottom',
   content: '',
+  text: '',
+  mediaFileId: '',
   weight: 1,
   enabled: true,
 });
+const adButtons = ref<{ text: string; url: string }[]>([]);
 const deleteAdTarget = ref<Ad | null>(null);
 const adDeleting = ref(false);
 
@@ -188,8 +203,11 @@ function openCreateAd() {
   editingAdId.value = null;
   adForm.position = 'top';
   adForm.content = '';
+  adForm.text = '';
+  adForm.mediaFileId = '';
   adForm.weight = 1;
   adForm.enabled = true;
+  adButtons.value = [];
   adFormError.value = '';
   adModalOpen.value = true;
 }
@@ -198,14 +216,25 @@ function openEditAd(ad: Ad) {
   editingAdId.value = ad.id;
   adForm.position = ad.position;
   adForm.content = ad.content;
+  adForm.text = ad.text ?? '';
+  adForm.mediaFileId = ad.media_file_id ?? '';
   adForm.weight = ad.weight;
   adForm.enabled = ad.enabled === 1;
+  adButtons.value = (ad.buttons ?? []).map((button) => ({ ...button }));
   adFormError.value = '';
   adModalOpen.value = true;
 }
 
 function closeAdModal() {
   if (!adSaving.value) adModalOpen.value = false;
+}
+
+function addAdButton() {
+  adButtons.value.push({ text: '', url: '' });
+}
+
+function removeAdButton(index: number) {
+  adButtons.value.splice(index, 1);
 }
 
 async function saveAd() {
@@ -220,11 +249,27 @@ async function saveAd() {
     adFormError.value = '权重必须是非负整数';
     return;
   }
+  const buttons: { text: string; url: string }[] = [];
+  for (const button of adButtons.value) {
+    const text = button.text.trim();
+    const url = button.url.trim();
+    if (!text && !url) {
+      continue;
+    }
+    if (!text || !url) {
+      adFormError.value = '按钮的 text 与 url 都必须填写';
+      return;
+    }
+    buttons.push({ text, url });
+  }
   const payload: AdPayload = {
     position: adForm.position,
     content,
     weight,
     enabled: adForm.enabled,
+    text: adForm.text.trim(),
+    mediaFileId: adForm.mediaFileId.trim() || null,
+    buttons,
   };
   adSaving.value = true;
   try {
@@ -366,10 +411,30 @@ onMounted(() => {
         </div>
 
         <div class="border-t border-slate-200 px-5 py-5">
+          <h3 class="text-sm font-semibold text-slate-900">资源发送</h3>
+          <p class="mt-0.5 text-xs text-slate-500">
+            合集资源获取时逐条发送，或按 photo/video 组成消息块发送
+          </p>
+          <div class="mt-4 grid gap-5 sm:grid-cols-2">
+            <Select
+              :model-value="String(form.resource_send_mode ?? 'single')"
+              label="资源发送模式"
+              :options="[
+                { label: '单独发送', value: 'single' },
+                { label: '消息块 Album', value: 'album' },
+              ]"
+              @update:model-value="form.resource_send_mode = $event"
+            />
+          </div>
+        </div>
+
+        <div class="border-t border-slate-200 px-5 py-5">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 class="text-sm font-semibold text-slate-900">广告配置</h3>
-              <p class="mt-0.5 text-xs text-slate-500">上方/下方广告位，权重越大出现概率越高</p>
+              <p class="mt-0.5 text-xs text-slate-500">
+                上方/下方广告位，权重越大出现概率越高，可配置文字、媒体与按钮
+              </p>
             </div>
             <Button size="sm" @click="openCreateAd">
               <Plus class="h-4 w-4" />
@@ -407,7 +472,19 @@ onMounted(() => {
                   </Badge>
                   <span class="text-xs text-slate-400">权重 {{ ad.weight }}</span>
                 </div>
-                <p class="mt-1.5 break-words text-sm text-slate-700">{{ ad.content }}</p>
+                <p class="mt-1.5 break-words text-sm text-slate-700">{{ ad.text || ad.content }}</p>
+                <p class="mt-1 break-all text-xs text-slate-400">
+                  媒体 file_id：{{ ad.media_file_id || '—' }}
+                </p>
+                <div v-if="ad.buttons.length" class="mt-1.5 flex flex-wrap gap-1.5">
+                  <Badge
+                    v-for="button in ad.buttons"
+                    :key="`${button.text}-${button.url}`"
+                    variant="neutral"
+                  >
+                    {{ button.text }}
+                  </Badge>
+                </div>
               </div>
               <div class="flex shrink-0 items-center gap-1">
                 <IconButton
@@ -458,6 +535,56 @@ onMounted(() => {
           :rows="3"
           @update:model-value="adForm.content = $event"
         />
+        <Input
+          :model-value="adForm.text"
+          label="消息文字"
+          placeholder="独立消息展示文字，可留空"
+          @update:model-value="adForm.text = $event"
+        />
+        <Input
+          :model-value="adForm.mediaFileId"
+          label="媒体 file_id"
+          placeholder="管理员转发保存的媒体文件 ID"
+          @update:model-value="adForm.mediaFileId = $event"
+        />
+        <div class="rounded-md border border-slate-200 p-3">
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-sm font-medium text-slate-700">按钮配置</p>
+            <Button size="sm" variant="outline" @click="addAdButton">
+              <Plus class="h-4 w-4" />
+              添加按钮
+            </Button>
+          </div>
+          <p class="mt-1 text-xs text-slate-400">每行配置 text 与 url，保存后作为广告按钮展示</p>
+          <div
+            v-if="adButtons.length === 0"
+            class="mt-3 rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-sm text-slate-400"
+          >
+            暂无按钮
+          </div>
+          <div v-else class="mt-3 space-y-2">
+            <div v-for="(button, index) in adButtons" :key="index" class="flex items-start gap-2">
+              <div class="grid flex-1 gap-2 sm:grid-cols-2">
+                <Input
+                  :model-value="button.text"
+                  placeholder="按钮文字"
+                  @update:model-value="button.text = $event"
+                />
+                <Input
+                  :model-value="button.url"
+                  placeholder="https://…"
+                  @update:model-value="button.url = $event"
+                />
+              </div>
+              <IconButton
+                title="删除按钮"
+                :icon="Trash2"
+                variant="destructive"
+                @click="removeAdButton(index)"
+              />
+            </div>
+          </div>
+        </div>
         <Input
           :model-value="adForm.weight"
           type="number"

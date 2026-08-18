@@ -48,15 +48,35 @@ interface ErrorLike {
 interface ApiBody {
   success?: boolean;
   data?: unknown;
-  error?: ErrorLike;
+  error?: ErrorLike | string;
   message?: string;
   code?: string;
+}
+
+function readErrorMessage(record: ApiBody): string | undefined {
+  const error = record.error;
+  if (typeof error === 'string' && error.trim()) {
+    return error;
+  }
+  if (error && typeof error === 'object' && typeof error.message === 'string' && error.message) {
+    return error.message;
+  }
+  return undefined;
+}
+
+function readErrorCode(record: ApiBody): string | undefined {
+  const error = record.error;
+  if (error && typeof error === 'object' && typeof error.code === 'string') {
+    return error.code;
+  }
+  return record.code;
 }
 
 function extractMessage(body: unknown, status: number, fallback: string): string {
   if (body && typeof body === 'object') {
     const record = body as ApiBody;
-    if (record.error?.message) return record.error.message;
+    const errorMessage = readErrorMessage(record);
+    if (errorMessage) return errorMessage;
     if (record.message) return record.message;
     if (record.code === 'RATE_LIMITED') return '操作过于频繁，请稍后再试';
   }
@@ -71,7 +91,11 @@ function unwrap<T>(data: unknown): T {
       return record.data as T;
     }
     if (record.success === false) {
-      throw new ApiError(400, record.error?.message ?? '请求失败', record.error?.code ?? 'API_ERROR');
+      throw new ApiError(
+        400,
+        readErrorMessage(record) ?? '请求失败',
+        readErrorCode(record) ?? 'API_ERROR',
+      );
     }
   }
   return data as T;
@@ -120,7 +144,7 @@ async function request<T>(
     throw new ApiError(
       response.status,
       extractMessage(data, response.status, `请求失败（HTTP ${response.status}）`),
-      record?.error?.code ?? record?.code ?? 'HTTP_ERROR',
+      record ? readErrorCode(record) ?? 'HTTP_ERROR' : 'HTTP_ERROR',
     );
   }
 

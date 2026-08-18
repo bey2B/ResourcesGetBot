@@ -7,6 +7,7 @@
 import {
   addPointsLog,
   banUser,
+  countResourceFilesByResourceIds,
   countAdminLogs,
   countBroadcasts,
   countCheckinsByDate,
@@ -22,24 +23,33 @@ import {
   deleteAd,
   deleteResource,
   getAd,
+  getAdMessage,
   getResourceById,
   getPointsCycleStats,
   getSettings,
   getUser,
   getUserStats,
   listAds,
+  listAdMessagesByAdIds,
   listAdminLogs,
   listDownloads,
   listPointsLogs,
   listResources,
   listUsers,
+  parseAdButtons,
+  saveAdMessage,
   setSettings,
   setUserPoints,
   unbanUser,
   updateAd,
+  updateAdMessage,
   updateResource,
   writeAdminLog,
+  type AdMessageRow,
+  type AdMessageUpdateInput,
+  type AdRow,
   type AdUpdateInput,
+  type ResourceFileInput,
   type ResourceListOptions,
   type ResourceUpdateInput,
 } from '../db/queries';
@@ -60,7 +70,7 @@ import {
   utcToday,
 } from '../utils/helpers';
 import { generateUniqueShortCode } from '../utils/shortcode';
-import type { AdminJwtPayload, AdPosition, Env } from '../types';
+import type { AdminJwtPayload, AdButton, AdPosition, Env } from '../types';
 
 const ADMIN_API_PREFIX = '/api/admin';
 const ADMIN_ADJUST_REASON = 'admin_adjust';
@@ -428,7 +438,15 @@ async function handleListResources(request: Request, env: Env): Promise<Response
     }),
     countResources(env.DB, { keyword: q }),
   ]);
-  return adminJson({ items, total }, 200, env, request);
+  const fileCounts = await countResourceFilesByResourceIds(
+    env.DB,
+    items.map((item) => item.id),
+  );
+  const enrichedItems = items.map((item) => ({
+    ...item,
+    file_count: fileCounts[item.id] ?? (item.file_id ? 1 : 0),
+  }));
+  return adminJson({ items: enrichedItems, total }, 200, env, request);
 }
 
 async function handleCreateResource(
@@ -437,7 +455,8 @@ async function handleCreateResource(
   admin: AdminJwtPayload,
 ): Promise<Response> {
   const body = await readJsonBody<Record<string, unknown>>(request);
-  const fileIds = parseFileIds(body.fileIds);
+  const files = parseResourceFiles(body.files);
+  const fileIds = files.length > 0 ? files.map((file) => file.fileId) : parseFileIds(body.fileIds);
   const fileId = fileIds[0] ?? (typeof body.fileId === 'string' ? body.fileId.trim() : '');
   if (!fileId) {
     throw new AppError('fileId 不能为空', 400, 'VALIDATION_ERROR');
@@ -454,7 +473,9 @@ async function handleCreateResource(
   const resource = await createResource(env.DB, {
     shortCode,
     fileId,
+    fileUniqueId: files[0]?.fileUniqueId ?? null,
     fileIds: normalizedFileIds,
+    files: files.length > 0 ? files : undefined,
     title,
     tags,
     isPaid,
@@ -493,6 +514,14 @@ async function handleUpdateResource(
     }
     patch.fileIds = fileIds;
     patch.fileId = fileIds[0] ?? patch.fileId;
+  }
+  if ('files' in body) {
+    const files = parseResourceFiles(body.files);
+    if (files.length === 0) {
+      throw new AppError('files 不能为空', 400, 'VALIDATION_ERROR');
+    }
+    patch.files = files;
+    patch.fileId = files[0]?.fileId ?? patch.fileId;
   }
   if ('title' in body) {
     patch.title = normalizeTitle(body.title);
@@ -738,6 +767,25 @@ async function handleUserDownloads(
 
 // ---------- 广告 ----------
 
+type AdminAdItem = AdRow & {
+  text: string;
+  media_file_id: string | null;
+  media_unique_id: string | null;
+  media_type: string;
+  buttons: AdButton[];
+};
+
+function toAdminAdItem(ad: AdRow, message: AdMessageRow | null): AdminAdItem {
+  return {
+    ...ad,
+    text: message?.text ?? '',
+    media_file_id: message?.media_file_id ?? null,
+    media_unique_id: message?.media_unique_id ?? null,
+    media_type: message?.media_type ?? '',
+    buttons: message ? parseAdButtons(message.buttons) : [],
+  };
+}
+
 async function handleListAds(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const pagination = parsePagination(url.searchParams, {
@@ -763,7 +811,20 @@ async function handleListAds(request: Request, env: Env): Promise<Response> {
     }),
     countAds(env.DB, { position, enabled }),
   ]);
-  return adminJson({ items, total }, 200, env, request);
+  const messages = await listAdMessagesByAdIds(
+    env.DB,
+    items.map((item) => item.id),
+  );
+  const messageByAdId = new Map(messages.map((message) => [message.ad_id, message]));
+  return adminJson(
+    {
+      items: items.map((item) => toAdminAdItem(item, messageByAdId.get(item.id) ?? null)),
+      total,
+    },
+    200,
+    env,
+    request,
+  );
 }
 
 async function handleCreateAd(
@@ -780,14 +841,25 @@ async function handleCreateAd(
   const weight = body.weight === undefined ? 1 : parseNonNegativeInt(body.weight, 'weight');
   const enabled =
     body.enabled === undefined ? true : parseBooleanValue(body.enabled, 'enabled');
+  const messagePatch = parseAdMessageFields(body);
   const ad = await createAd(env.DB, { position, content, weight, enabled });
+  if (Object.keys(messagePatch).length > 0) {
+    await saveAdMessage(env.DB, ad.id, {
+      text: messagePatch.text ?? '',
+      mediaFileId: messagePatch.mediaFileId ?? null,
+      mediaUniqueId: messagePatch.mediaUniqueId ?? null,
+      mediaType: messagePatch.mediaType ?? '',
+      buttons: messagePatch.buttons ?? [],
+    });
+  }
+  const message = await getAdMessage(env.DB, ad.id);
   await safeWriteAdminLog(
     env.DB,
     admin.userId,
     'ad_create',
-    `id=${ad.id} position=${position} enabled=${enabled ? 1 : 0}`,
+    `id=${ad.id} position=${position} enabled=${enabled ? 1 : 0} buttons=${messagePatch.buttons?.length ?? 0}`,
   );
-  return adminJson(ad, 201, env, request);
+  return adminJson(toAdminAdItem(ad, message), 201, env, request);
 }
 
 async function handleUpdateAd(
@@ -802,6 +874,7 @@ async function handleUpdateAd(
   }
   const body = await readJsonBody<Record<string, unknown>>(request);
   const patch: AdUpdateInput = {};
+  const messagePatch = parseAdMessageFields(body);
   if ('position' in body) {
     patch.position = parseAdPosition(body.position);
   }
@@ -819,20 +892,28 @@ async function handleUpdateAd(
     patch.enabled = parseBooleanValue(body.enabled, 'enabled');
   }
 
-  if (Object.keys(patch).length === 0) {
-    return adminJson(existing, 200, env, request);
+  let updated: AdRow = existing;
+  if (Object.keys(patch).length > 0) {
+    const result = await updateAd(env.DB, adId, patch);
+    if (!result) {
+      throw new AppError('广告不存在', 404, 'NOT_FOUND');
+    }
+    updated = result;
   }
-  const updated = await updateAd(env.DB, adId, patch);
-  if (!updated) {
-    throw new AppError('广告不存在', 404, 'NOT_FOUND');
+  let message = await getAdMessage(env.DB, adId);
+  if (Object.keys(messagePatch).length > 0) {
+    message = await updateAdMessage(env.DB, adId, messagePatch);
+  }
+  if (Object.keys(patch).length === 0 && Object.keys(messagePatch).length === 0) {
+    return adminJson(toAdminAdItem(existing, message), 200, env, request);
   }
   await safeWriteAdminLog(
     env.DB,
     admin.userId,
     'ad_update',
-    `id=${adId} ${JSON.stringify(patch)}`,
+    `id=${adId} ${JSON.stringify({ ...patch, buttons: messagePatch.buttons?.length ?? undefined })}`,
   );
-  return adminJson(updated, 200, env, request);
+  return adminJson(toAdminAdItem(updated, message), 200, env, request);
 }
 
 async function handleDeleteAd(
@@ -873,6 +954,32 @@ function parseFileIds(value: unknown): string[] {
   ];
 }
 
+function parseResourceFiles(value: unknown): ResourceFileInput[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const files: ResourceFileInput[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' && item.trim()) {
+      files.push({ fileId: item.trim(), mediaType: '', sortOrder: files.length });
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      const fileId = typeof record.fileId === 'string' ? record.fileId.trim() : '';
+      if (fileId) {
+        files.push({
+          fileId,
+          fileUniqueId: typeof record.fileUniqueId === 'string' ? record.fileUniqueId : null,
+          mediaType: typeof record.mediaType === 'string' ? record.mediaType.trim() : '',
+          sortOrder: files.length,
+        });
+      }
+    }
+  }
+  return files;
+}
+
 function parseAdPosition(value: unknown): AdPosition {
   if (value !== 'top' && value !== 'bottom') {
     throw new AppError('position 必须是 top 或 bottom', 400, 'VALIDATION_ERROR');
@@ -892,6 +999,60 @@ function parseBooleanValue(value: unknown, label: string): boolean {
     throw new AppError(`${label} 必须是布尔值`, 400, 'VALIDATION_ERROR');
   }
   return value;
+}
+
+function parseAdButtonsValue(value: unknown): AdButton[] {
+  if (!Array.isArray(value)) {
+    throw new AppError('buttons 必须是数组', 400, 'VALIDATION_ERROR');
+  }
+  const buttons: AdButton[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') {
+      throw new AppError('按钮必须是 { text, url } 对象', 400, 'VALIDATION_ERROR');
+    }
+    const record = item as Record<string, unknown>;
+    const text = typeof record.text === 'string' ? record.text.trim() : '';
+    const url = typeof record.url === 'string' ? record.url.trim() : '';
+    if (!text || !url) {
+      throw new AppError('按钮的 text 和 url 都不能为空', 400, 'VALIDATION_ERROR');
+    }
+    buttons.push({ text, url });
+  }
+  return buttons;
+}
+
+function parseAdMessageFields(body: Record<string, unknown>): AdMessageUpdateInput {
+  const patch: AdMessageUpdateInput = {};
+  if ('text' in body) {
+    if (typeof body.text !== 'string') {
+      throw new AppError('text 必须是字符串', 400, 'VALIDATION_ERROR');
+    }
+    patch.text = body.text.trim();
+  }
+  if ('mediaFileId' in body) {
+    const value = body.mediaFileId;
+    if (value !== null && typeof value !== 'string') {
+      throw new AppError('mediaFileId 必须是字符串或 null', 400, 'VALIDATION_ERROR');
+    }
+    patch.mediaFileId = typeof value === 'string' ? value.trim() : null;
+  }
+  if ('mediaUniqueId' in body) {
+    const value = body.mediaUniqueId;
+    if (value !== null && typeof value !== 'string') {
+      throw new AppError('mediaUniqueId 必须是字符串或 null', 400, 'VALIDATION_ERROR');
+    }
+    patch.mediaUniqueId = typeof value === 'string' ? value.trim() : null;
+  }
+  if ('mediaType' in body) {
+    if (typeof body.mediaType !== 'string') {
+      throw new AppError('mediaType 必须是字符串', 400, 'VALIDATION_ERROR');
+    }
+    patch.mediaType = body.mediaType.trim();
+  }
+  if ('buttons' in body) {
+    patch.buttons = parseAdButtonsValue(body.buttons);
+  }
+  return patch;
 }
 
 function normalizeTitle(value: unknown): string {

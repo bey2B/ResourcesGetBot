@@ -157,13 +157,13 @@ function openBan(user: User) {
 
 async function confirmBanToggle() {
   if (!banTarget.value) return;
-  const nextBanned = banTarget.value.is_banned === 1 ? 0 : 1;
+  const nextBanned = banTarget.value.is_banned !== 1;
   banSaving.value = true;
   try {
     await api.patch<User>(`/users/${banTarget.value.user_id}`, {
       isBanned: nextBanned,
     });
-    toast.push('success', nextBanned === 1 ? '用户已封禁' : '用户已解封');
+    toast.push('success', nextBanned ? '用户已封禁' : '用户已解封');
     banTarget.value = null;
     await load();
   } catch (err) {

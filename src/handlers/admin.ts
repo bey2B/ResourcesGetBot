@@ -3,6 +3,7 @@
  * 仅 ADMIN_IDS 中配置的 user_id 可用；媒体说明以 /bc 开头时交给广播处理器。
  */
 
+import { InlineKeyboard } from 'grammy';
 import type { Bot } from 'grammy';
 import {
   countResources,
@@ -20,12 +21,15 @@ import { isAdminUserId } from '../utils/auth';
 import { formatLocalDateTime, parseBoolean } from '../utils/helpers';
 import { generateUniqueShortCode } from '../utils/shortcode';
 import type { BotContext } from '../bot';
+import { AD_CONFIG_START_CALLBACK } from './ad-config';
 import {
+  BROADCAST_START_CALLBACK,
   extractMediaFromMessage,
   getMessageCaption,
   isBroadcastCaptionCommand,
   safeWriteAdminLog,
 } from './broadcast';
+import { RESOURCE_STORAGE_START_CALLBACK } from './resource-storage';
 
 const ADMIN_HELP = `管理员命令：
 /admin - 查看本帮助
@@ -224,7 +228,14 @@ export function registerAdminHandlers(bot: Bot<BotContext>): void {
     if (adminId === null) {
       return;
     }
-    await ctx.reply(ADMIN_HELP);
+    await ctx.reply(ADMIN_HELP, {
+      reply_markup: new InlineKeyboard()
+        .text('资源存储', RESOURCE_STORAGE_START_CALLBACK)
+        .row()
+        .text('广告配置', AD_CONFIG_START_CALLBACK)
+        .row()
+        .text('广播', BROADCAST_START_CALLBACK),
+    });
   });
 
   bot.chatType('private').command('res_list', async (ctx) => {
@@ -433,6 +444,14 @@ export function registerAdminHandlers(bot: Bot<BotContext>): void {
       shortCode,
       fileId: media.fileId,
       fileUniqueId: media.fileUniqueId ?? null,
+      files: [
+        {
+          fileId: media.fileId,
+          fileUniqueId: media.fileUniqueId ?? null,
+          mediaType: media.kind,
+          sortOrder: 0,
+        },
+      ],
       title,
       tags: meta.tags,
       isPaid: meta.isPaid,

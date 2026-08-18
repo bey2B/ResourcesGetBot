@@ -29,6 +29,7 @@ export interface Resource {
   creator_id: number | null;
   created_at: string;
   updated_at: string;
+  file_count?: number;
 }
 
 export interface AdminLog {
@@ -45,8 +46,18 @@ export interface Ad {
   content: string;
   weight: number;
   enabled: number;
+  text: string;
+  media_file_id: string | null;
+  media_unique_id: string | null;
+  media_type: string;
+  buttons: AdButton[];
   created_at: string;
   updated_at: string;
+}
+
+export interface AdButton {
+  text: string;
+  url: string;
 }
 
 export interface PointsLog {
@@ -135,4 +146,9 @@ export interface AdPayload {
   content: string;
   weight: number;
   enabled: boolean;
+  text?: string;
+  mediaFileId?: string | null;
+  mediaUniqueId?: string | null;
+  mediaType?: string;
+  buttons?: AdButton[];
 }

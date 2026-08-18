@@ -3,11 +3,13 @@
  * executeBroadcast 独立可调用，供 src/cron.ts 与任务 6 的 Cron Trigger 复用。
  */
 
+import { InlineKeyboard } from 'grammy';
 import type { Api, Bot } from 'grammy';
 import type { Message } from 'grammy/types';
 import {
   cancelBroadcast,
   claimBroadcastForSending,
+  countUsers,
   createBroadcast,
   finishBroadcast,
   getBroadcast,
@@ -98,6 +100,61 @@ export interface BroadcastProgressReport {
 const BROADCAST_CAPTION_RE = /^\s*\/(bc|broadcast|bc_once|bc_daily|bc_weekly|bc_monthly)\b/i;
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [1000, 5000];
 const DEFAULT_BATCH_DELAY_MS = 35;
+
+export const BROADCAST_START_CALLBACK = 'broadcast:start';
+export const BROADCAST_CONFIRM_NOW_CALLBACK = 'broadcast:confirm:now';
+export const BROADCAST_CONFIRM_SCHEDULE_CALLBACK = 'broadcast:confirm:schedule';
+export const BROADCAST_CONFIRM_CANCEL_CALLBACK = 'broadcast:confirm:cancel';
+
+export const BROADCAST_ENTRY_TEMPLATE = `您正在向 xxx 位用户发送广播消息
+
+请向我发送或转发一条消息，消息内容可以是任何形式——文字、照片、视频，甚至是贴纸。您还可以转发频道中的消息，以便查看其实际浏览量。
+
+输入 /cancel 取消操作。`;
+
+export function buildBroadcastEntryText(userCount: number): string {
+  return BROADCAST_ENTRY_TEMPLATE.replace('xxx', String(userCount));
+}
+
+export const BROADCAST_CONFIRMATION_TEXT = `已收到广播内容，请确认：
+
+立即发送：马上向全部用户发送
+定时发送：设置发送时间后发送
+
+请选择下方按钮，或输入 /cancel 取消。`;
+
+export const BROADCAST_SCHEDULE_PROMPT = `请输入定时发送时间：
+
+/bc_once YYYY-MM-DD HH:MM - 一次性定时
+/bc_daily HH:MM - 每天定时
+/bc_weekly HH:MM - 每周定时
+/bc_monthly 日(1-28) HH:MM - 每月定时
+
+输入 /cancel 取消操作。`;
+
+export const BROADCAST_CANCELLED_TEXT = '已取消本次广播，内容已丢弃。';
+
+export type BroadcastDraftState =
+  | 'awaiting_message'
+  | 'awaiting_confirm'
+  | 'awaiting_schedule';
+
+export interface BroadcastDraft {
+  adminId: number;
+  state: BroadcastDraftState;
+  content: string;
+  createdAt: number;
+}
+
+const broadcastDrafts = new Map<number, BroadcastDraft>();
+
+export function getBroadcastDraft(adminId: number): BroadcastDraft | null {
+  return broadcastDrafts.get(adminId) ?? null;
+}
+
+export function clearBroadcastDraft(adminId: number): boolean {
+  return broadcastDrafts.delete(adminId);
+}
 
 const BROADCAST_TYPE_LABELS: Record<BroadcastType, string> = {
   now: '立即',
@@ -684,27 +741,6 @@ function runBroadcastAsync(
   }, 0);
 }
 
-async function startImmediateTextBroadcast(
-  ctx: BotContext,
-  adminId: number,
-  text: string,
-): Promise<void> {
-  const row = await createBroadcast(ctx.env.DB, {
-    content: serializeBroadcastText(text),
-    type: 'now',
-    scheduledAt: utcNowIso(),
-    createdBy: adminId,
-  });
-  await safeWriteAdminLog(
-    ctx.env.DB,
-    adminId,
-    'broadcast_create',
-    `id=${row.id} type=now content=${text.slice(0, 200)}`,
-  );
-  await ctx.reply(`已创建立即广播 #${row.id}，开始逐批发送，完成后将汇报进度。`);
-  runBroadcastAsync(ctx, adminId, row, createTelegramDeliverer(ctx.api));
-}
-
 async function scheduleTextBroadcast(
   ctx: BotContext,
   adminId: number,
@@ -738,6 +774,226 @@ async function scheduleTextBroadcast(
   );
 }
 
+function buildBroadcastConfirmKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('立即发送', BROADCAST_CONFIRM_NOW_CALLBACK)
+    .text('定时发送', BROADCAST_CONFIRM_SCHEDULE_CALLBACK)
+    .text('取消', BROADCAST_CONFIRM_CANCEL_CALLBACK);
+}
+
+async function answerCallbackSafely(ctx: BotContext): Promise<void> {
+  try {
+    await ctx.answerCallbackQuery();
+  } catch {
+    // 回调确认失败不阻塞主流程。
+  }
+}
+
+async function startBroadcastEntry(ctx: BotContext): Promise<void> {
+  const adminId = await requireAdmin(ctx);
+  if (adminId === null) {
+    await answerCallbackSafely(ctx);
+    return;
+  }
+  const userCount = await countUsers(ctx.env.DB);
+  clearBroadcastDraft(adminId);
+  broadcastDrafts.set(adminId, {
+    adminId,
+    state: 'awaiting_message',
+    content: '',
+    createdAt: Date.now(),
+  });
+  await ctx.answerCallbackQuery('已进入广播');
+  await ctx.reply(buildBroadcastEntryText(userCount));
+}
+
+async function enterBroadcastDraft(
+  ctx: BotContext,
+  adminId: number,
+  content: ParsedBroadcastContent,
+): Promise<void> {
+  broadcastDrafts.set(adminId, {
+    adminId,
+    state: 'awaiting_confirm',
+    content:
+      content.kind === 'media'
+        ? serializeBroadcastMedia(content.media)
+        : serializeBroadcastText(content.text),
+    createdAt: Date.now(),
+  });
+  await ctx.reply(BROADCAST_CONFIRMATION_TEXT, {
+    reply_markup: buildBroadcastConfirmKeyboard(),
+  });
+}
+
+async function confirmBroadcastNow(ctx: BotContext, adminId: number): Promise<void> {
+  const draft = getBroadcastDraft(adminId);
+  if (!draft || !draft.content) {
+    await ctx.answerCallbackQuery('当前没有待发送的广播内容');
+    await ctx.reply('当前没有待发送的广播内容。');
+    return;
+  }
+  const row = await createBroadcast(ctx.env.DB, {
+    content: draft.content,
+    type: 'now',
+    scheduledAt: utcNowIso(),
+    createdBy: adminId,
+  });
+  clearBroadcastDraft(adminId);
+  await safeWriteAdminLog(
+    ctx.env.DB,
+    adminId,
+    'broadcast_create',
+    `id=${row.id} type=now content=${previewBroadcastContent(row.content, 200)}`,
+  );
+  await ctx.answerCallbackQuery('已确认发送');
+  await ctx.reply(`已确认，开始广播 #${row.id}，完成后将汇报进度。`);
+  runBroadcastAsync(ctx, adminId, row, createTelegramDeliverer(ctx.api));
+}
+
+async function enterBroadcastScheduleMode(ctx: BotContext, adminId: number): Promise<void> {
+  const draft = getBroadcastDraft(adminId);
+  if (!draft || !draft.content) {
+    await ctx.answerCallbackQuery('当前没有待发送的广播内容');
+    await ctx.reply('当前没有待发送的广播内容。');
+    return;
+  }
+  draft.state = 'awaiting_schedule';
+  await ctx.answerCallbackQuery('请输入定时时间');
+  await ctx.reply(BROADCAST_SCHEDULE_PROMPT);
+}
+
+async function handleBroadcastScheduleInput(
+  ctx: BotContext,
+  adminId: number,
+): Promise<void> {
+  const draft = getBroadcastDraft(adminId);
+  if (!draft || !draft.content) {
+    await ctx.reply('当前没有待发送的广播内容。');
+    clearBroadcastDraft(adminId);
+    return;
+  }
+  const text = ctx.message?.text?.trim() ?? '';
+  const match = /^\/(bc_once|bc_daily|bc_weekly|bc_monthly)(?:\s+([\s\S]*))?$/i.exec(text);
+  if (!match) {
+    await ctx.reply('格式不正确，请按上面的格式输入定时时间。');
+    return;
+  }
+  const typeMap: Record<string, BroadcastType> = {
+    bc_once: 'once',
+    bc_daily: 'daily',
+    bc_weekly: 'weekly',
+    bc_monthly: 'monthly',
+  };
+  const type = typeMap[match[1].toLowerCase()];
+  const parsed = parseScheduleArgs(type, match[2] ?? '');
+  if (!parsed.ok) {
+    await ctx.reply(parsed.message);
+    return;
+  }
+  const row = await createBroadcast(ctx.env.DB, {
+    content: draft.content,
+    type,
+    scheduledAt: parsed.value.scheduledAt,
+    createdBy: adminId,
+  });
+  await updateBroadcastStatus(ctx.env.DB, row.id, 'scheduled');
+  await safeWriteAdminLog(
+    ctx.env.DB,
+    adminId,
+    'broadcast_schedule',
+    `id=${row.id} type=${type} at=${parsed.value.scheduledAt}`,
+  );
+  clearBroadcastDraft(adminId);
+  await ctx.reply(
+    `已安排定时广播 #${row.id}（${BROADCAST_TYPE_LABELS[type]}）\n首次发送：${formatLocalDateTime(parsed.value.scheduledAt)}`,
+  );
+}
+
+async function cancelBroadcastDraft(ctx: BotContext, adminId: number): Promise<void> {
+  const removed = clearBroadcastDraft(adminId);
+  await ctx.reply(removed ? BROADCAST_CANCELLED_TEXT : '当前没有待发送的广播。');
+}
+
+export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): void {
+  bot.chatType('private').callbackQuery(BROADCAST_START_CALLBACK, async (ctx) => {
+    await startBroadcastEntry(ctx);
+  });
+
+  bot.chatType('private').command('cancel', async (ctx, next) => {
+    const from = ctx.from;
+    if (!from || !getBroadcastDraft(from.id)) {
+      await next();
+      return;
+    }
+    await cancelBroadcastDraft(ctx, from.id);
+  });
+
+  bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_NOW_CALLBACK, async (ctx) => {
+    const adminId = await requireAdmin(ctx);
+    if (adminId === null) {
+      await answerCallbackSafely(ctx);
+      return;
+    }
+    await confirmBroadcastNow(ctx, adminId);
+  });
+
+  bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_SCHEDULE_CALLBACK, async (ctx) => {
+    const adminId = await requireAdmin(ctx);
+    if (adminId === null) {
+      await answerCallbackSafely(ctx);
+      return;
+    }
+    await enterBroadcastScheduleMode(ctx, adminId);
+  });
+
+  bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_CANCEL_CALLBACK, async (ctx) => {
+    const adminId = await requireAdmin(ctx);
+    if (adminId === null) {
+      await answerCallbackSafely(ctx);
+      return;
+    }
+    const removed = clearBroadcastDraft(adminId);
+    await ctx.answerCallbackQuery(removed ? '已取消广播' : '当前没有待发送的广播');
+    await ctx.reply(removed ? BROADCAST_CANCELLED_TEXT : '当前没有待发送的广播。');
+  });
+
+  // 广播草稿状态下优先接管文本/媒体；无草稿时放行给下游处理器。
+  bot.chatType('private').on('message:text', async (ctx, next) => {
+    const from = ctx.from;
+    const draft = from ? getBroadcastDraft(from.id) : null;
+    if (!draft) {
+      await next();
+      return;
+    }
+    if (draft.state === 'awaiting_schedule') {
+      await handleBroadcastScheduleInput(ctx, from.id);
+      return;
+    }
+    const text = ctx.message?.text?.trim() ?? '';
+    if (!text || text.startsWith('/')) {
+      await next();
+      return;
+    }
+    await enterBroadcastDraft(ctx, from.id, { kind: 'text', text });
+  });
+
+  bot.chatType('private').on('message:media', async (ctx, next) => {
+    const from = ctx.from;
+    const draft = from ? getBroadcastDraft(from.id) : null;
+    if (!draft) {
+      await next();
+      return;
+    }
+    const media = extractMediaFromMessage(ctx.message);
+    if (!media) {
+      await ctx.reply('无法识别该媒体文件，请转发图片、视频、文档、音频等。');
+      return;
+    }
+    await enterBroadcastDraft(ctx, from.id, { kind: 'media', media });
+  });
+}
+
 export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
   bot.chatType('private').command('bc_help', async (ctx) => {
     const adminId = await requireAdmin(ctx);
@@ -757,7 +1013,7 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
       await ctx.reply(BROADCAST_HELP);
       return;
     }
-    await startImmediateTextBroadcast(ctx, adminId, args);
+    await enterBroadcastDraft(ctx, adminId, { kind: 'text', text: args });
   });
 
   bot.chatType('private').command('broadcast', async (ctx) => {
@@ -770,7 +1026,7 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
       await ctx.reply(BROADCAST_HELP);
       return;
     }
-    await startImmediateTextBroadcast(ctx, adminId, args);
+    await enterBroadcastDraft(ctx, adminId, { kind: 'text', text: args });
   });
 
   bot.chatType('private').command('bc_once', async (ctx) => {
@@ -901,23 +1157,10 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
       );
       return;
     }
-    const row = await createBroadcast(ctx.env.DB, {
-      content: serializeBroadcastMedia(payload),
-      type: 'now',
-      scheduledAt: utcNowIso(),
-      createdBy: adminId,
-    });
-    await safeWriteAdminLog(
-      ctx.env.DB,
-      adminId,
-      'broadcast_create',
-      `id=${row.id} type=now media=1 caption=${(command.caption ?? '').slice(0, 200)}`,
-    );
-    await ctx.reply(`已创建媒体广播 #${row.id}，开始逐批发送，完成后将汇报进度。`);
-    runBroadcastAsync(ctx, adminId, row, createTelegramDeliverer(ctx.api));
+    await enterBroadcastDraft(ctx, adminId, { kind: 'media', media: payload });
   });
 
-  // 转发文本：管理员转发消息给 Bot 时直接作为立即广播内容。
+  // 转发文本：管理员转发消息给 Bot 时进入二次确认草稿。
   bot.chatType('private').on('message:text', async (ctx, next) => {
     const msg = ctx.message;
     if (!isForwardedMessage(msg)) {
@@ -933,6 +1176,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
       await next();
       return;
     }
-    await startImmediateTextBroadcast(ctx, adminId, text);
+    await enterBroadcastDraft(ctx, adminId, { kind: 'text', text });
   });
 }

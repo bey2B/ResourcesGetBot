@@ -49,10 +49,4 @@ export function registerPointsHandlers(bot: Bot<BotContext>): void {
     const result = await getPointsBalance(ctx.env.DB, user.user_id);
     await ctx.reply(result.message);
   });
-
-  bot.chatType([...POINTS_CHAT_TYPES]).command('purchases', async (ctx) => {
-    const user = await ensureUser(ctx);
-    const records = await getPurchaseRecords(ctx.env.DB, user.user_id);
-    await ctx.reply(buildPurchasedResourcesText(records));
-  });
 }

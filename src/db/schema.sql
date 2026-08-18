@@ -33,11 +33,36 @@ CREATE TABLE IF NOT EXISTS resources (
   FOREIGN KEY (creator_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
+-- 资源-文件多对多：一个资源可关联多个媒体文件，按 sort_order 有序交付
+CREATE TABLE IF NOT EXISTS resource_files (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  resource_id    INTEGER NOT NULL,
+  file_id        TEXT NOT NULL,
+  file_unique_id TEXT,                          -- Telegram 文件唯一 ID（可空）
+  media_type     TEXT NOT NULL DEFAULT '',      -- photo/video/document/audio/voice/sticker/animation/video_note
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  UNIQUE (resource_id, file_id),
+  FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS downloads (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL,
   resource_id INTEGER NOT NULL,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+  FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE
+);
+
+-- 购买记录：付费资源一次性购买，user_id + resource_id 唯一
+CREATE TABLE IF NOT EXISTS purchases (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL,
+  resource_id INTEGER NOT NULL,
+  price       INTEGER NOT NULL CHECK (price >= 0),
+  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  UNIQUE (user_id, resource_id),
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
   FOREIGN KEY (resource_id) REFERENCES resources(id) ON DELETE CASCADE
 );
@@ -77,6 +102,20 @@ CREATE TABLE IF NOT EXISTS ads (
   enabled    INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- 广告独立消息：文字 + 媒体 file_id + 按钮（buttons 为 JSON 数组 [{text,url}]）
+CREATE TABLE IF NOT EXISTS ad_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ad_id           INTEGER NOT NULL UNIQUE,
+  text            TEXT NOT NULL DEFAULT '',
+  media_file_id   TEXT,
+  media_unique_id TEXT,
+  media_type      TEXT NOT NULL DEFAULT '',
+  buttons         TEXT NOT NULL DEFAULT '[]',
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  FOREIGN KEY (ad_id) REFERENCES ads(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -126,9 +165,15 @@ CREATE INDEX IF NOT EXISTS idx_resources_download_count ON resources(download_co
 CREATE INDEX IF NOT EXISTS idx_resources_is_paid ON resources(is_paid);
 CREATE INDEX IF NOT EXISTS idx_resources_creator_id ON resources(creator_id);
 
+CREATE INDEX IF NOT EXISTS idx_resource_files_resource_sort ON resource_files(resource_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_resource_files_file_id ON resource_files(file_id);
+
 CREATE INDEX IF NOT EXISTS idx_downloads_user_created ON downloads(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_downloads_resource_created ON downloads(resource_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_purchases_user_created ON purchases(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_purchases_resource_created ON purchases(resource_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_checkins_date ON checkins(date);
 
@@ -136,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_broadcasts_status_scheduled ON broadcasts(status,
 CREATE INDEX IF NOT EXISTS idx_broadcasts_created_at ON broadcasts(created_at);
 
 CREATE INDEX IF NOT EXISTS idx_ads_position_enabled ON ads(position, enabled);
+CREATE INDEX IF NOT EXISTS idx_ad_messages_ad_id ON ad_messages(ad_id);
 
 CREATE INDEX IF NOT EXISTS idx_admin_logs_admin_id ON admin_logs(admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_created_at ON admin_logs(created_at);

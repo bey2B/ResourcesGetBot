@@ -5,11 +5,17 @@
  */
 
 import { Bot, Context } from 'grammy';
+import { registerAdConfigHandlers } from './handlers/ad-config';
 import { registerAdminHandlers } from './handlers/admin';
-import { registerBroadcastHandlers } from './handlers/broadcast';
+import {
+  registerBroadcastConfirmationHandlers,
+  registerBroadcastHandlers,
+} from './handlers/broadcast';
 import { registerGroupHandlers } from './handlers/group';
 import { registerPointsHandlers } from './handlers/points';
+import { registerPurchasesHandlers } from './handlers/purchases';
 import { registerResourceHandlers } from './handlers/resource';
+import { registerResourceStorageHandlers } from './handlers/resource-storage';
 import { registerSettingsHandlers } from './handlers/settings';
 import { registerStartHandlers } from './handlers/start';
 import { errorMessage, normalizeError } from './utils/helpers';
@@ -65,9 +71,13 @@ export function registerHandlers(botInstance: Bot<BotContext>): void {
     }
   });
   registerStartHandlers(botInstance);
+  registerBroadcastConfirmationHandlers(botInstance);
+  registerResourceStorageHandlers(botInstance);
+  registerAdConfigHandlers(botInstance);
   registerResourceHandlers(botInstance);
   registerGroupHandlers(botInstance);
   registerPointsHandlers(botInstance);
+  registerPurchasesHandlers(botInstance);
   registerBroadcastHandlers(botInstance);
   registerAdminHandlers(botInstance);
   registerSettingsHandlers(botInstance);

@@ -34,6 +34,16 @@ export interface Resource {
   updated_at: string;
 }
 
+export interface ResourceFile {
+  id: number;
+  resource_id: number;
+  file_id: string;
+  file_unique_id: string | null;
+  media_type: string;
+  sort_order: number;
+  created_at: string;
+}
+
 export interface Download {
   id: number;
   user_id: number;
@@ -42,6 +52,14 @@ export interface Download {
   title: string;
   short_code: string;
   username: string | null;
+}
+
+export interface Purchase {
+  id: number;
+  user_id: number;
+  resource_id: number;
+  price: number;
+  created_at: string;
 }
 
 export interface Checkin {
@@ -89,6 +107,23 @@ export interface Ad {
   updated_at: string;
 }
 
+export interface AdButton {
+  text: string;
+  url: string;
+}
+
+export interface AdMessage {
+  id: number;
+  ad_id: number;
+  text: string;
+  media_file_id: string | null;
+  media_unique_id: string | null;
+  media_type: string;
+  buttons: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Setting {
   key: string;
   value: string;
@@ -123,10 +158,13 @@ export interface PointsLog {
 // 与 queries.ts 现有行类型对齐的别名，后续任务收敛时可直接切换引用
 export type UserRow = User;
 export type ResourceRow = Resource;
+export type ResourceFileRow = ResourceFile;
 export type DownloadRow = Download;
+export type PurchaseRow = Purchase;
 export type CheckinRow = Checkin;
 export type BroadcastRow = Broadcast;
 export type AdRow = Ad;
+export type AdMessageRow = AdMessage;
 export type SettingRow = Setting;
 export type AdminLogRow = AdminLog;
 export type RateLimitRow = RateLimit;

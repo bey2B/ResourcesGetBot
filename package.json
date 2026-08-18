@@ -10,8 +10,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
-    "build:admin": "npm --prefix admin install && npm --prefix admin run build",
-    "build": "npm run typecheck && npm run build:admin && wrangler deploy --dry-run",
+    "build:admin": "cd admin && npm install && npm run build",
+    "build": "npm run typecheck && npm run build:admin && node scripts/wrangler-dry-run.mjs",
     "deploy:bot": "npm run typecheck && wrangler deploy",
     "deploy:admin": "npm run typecheck && npm run build:admin && wrangler deploy -c wrangler.admin.toml",
     "deploy": "npm run deploy:bot && npm run deploy:admin",
