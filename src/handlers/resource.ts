@@ -1,8 +1,7 @@
 /**
  * 资源处理器：短码查询、限流、强制关注、免费/付费购买与文件交付。
  */
-
-import type { Bot } from 'grammy';
+import { InlineKeyboard, type Bot } from 'grammy';
 import {
   getResourceByShortCode,
   hasDownloaded,
@@ -21,7 +20,6 @@ import { isValidShortCode } from '../utils/shortcode';
 import type { BotContext } from '../bot';
 
 export { parseResourceFileIds } from '../services/delivery';
-
 export const MESSAGE_BLOCK_ENABLED_KEY = 'message_block_enabled';
 
 export interface ResourceRequestOptions {
@@ -164,20 +162,19 @@ export async function handleResourceRequest(
 ): Promise<ResourceDeliveryResult> {
   const messageIds: number[] = [];
   const db = ctx.env.DB;
+  // 统一转小写，兼容历史大写短码与用户大小写混合输入
+  shortCode = shortCode.toLowerCase();
   const codeValid = isValidShortCode(shortCode);
-
   if (!codeValid) {
     await replyAndTrack(ctx, '短码格式不正确，请输入 8 位资源短码。', messageIds);
     return { delivered: false, messageIds };
   }
-
   const user = await ensureUser(ctx);
   const resource = await getResourceByShortCode(db, shortCode);
   if (!resource) {
     await replyAndTrack(ctx, '未找到该资源，短码可能已失效或输入有误。', messageIds);
     return { delivered: false, messageIds };
   }
-
   const rateLimit = await consumeRateLimit(db, user.user_id, resource.id);
   let subscriptionOk: boolean | null = null;
   if (rateLimit.allowed && !options.skipSubscriptionCheck) {
@@ -186,11 +183,26 @@ export async function handleResourceRequest(
     });
     subscriptionOk = check.ok;
     if (!check.ok) {
-      await replyAndTrack(ctx, check.message, messageIds);
+      const keyboard = new InlineKeyboard();
+      const numericChannels: string[] = [];
+      for (const channel of check.missingChannels) {
+        const handle = channel.startsWith('@') ? channel.slice(1) : null;
+        if (handle) {
+          keyboard.url(`加入 ${channel}`, `https://t.me/${handle}`).row();
+        } else {
+          numericChannels.push(channel);
+        }
+      }
+      keyboard.text('我已加入', `sub_recheck:${shortCode}`);
+      const lines = ['您需要加入以下频道才能使用：'];
+      if (numericChannels.length > 0) {
+        lines.push(numericChannels.join('\n'));
+      }
+      const msg = await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
+      messageIds.push(msg.message_id);
       return { delivered: false, messageIds };
     }
   }
-
   const owned = await hasDownloaded(db, user.user_id, resource.id);
   const decision = decideResourceDelivery({
     codeValid,
@@ -201,7 +213,6 @@ export async function handleResourceRequest(
     subscriptionOk,
     owned,
   });
-
   switch (decision.type) {
     case 'user_not_found':
       await replyAndTrack(ctx, '用户不存在，请先发送 /start 注册。', messageIds);
@@ -222,7 +233,7 @@ export async function handleResourceRequest(
       break;
     }
     case 'deliver_owned':
-      // 已购付费资源不重复记账，避免“我已购买”列表出现重复条目。
+      // 已购付费资源不重复记账，避免"我已购买"列表出现重复条目。
       await recordDownloadIfAbsent(db, user.user_id, resource.id);
       await replyAndTrack(ctx, '你已购买过该资源，再次为你发送。', messageIds);
       break;
@@ -235,7 +246,6 @@ export async function handleResourceRequest(
       // 这些分支在进入 switch 前已处理完毕。
       return { delivered: false, messageIds };
   }
-
   const chatId = requireChatId(ctx);
   await sendIndependentAd(ctx, chatId, 'top', messageIds);
   const delivery = await deliverResource(ctx.api, chatId, resource, {
@@ -276,6 +286,19 @@ export function registerResourceHandlers(bot: Bot<BotContext>): void {
       await next();
       return;
     }
+    await handleResourceRequest(ctx, shortCode);
+  });
+}
+
+/** "我已加入"按钮回调：重新校验订阅状态，通过则继续资源投递。 */
+export function registerSubscriptionRecheckHandler(bot: Bot<BotContext>): void {
+  bot.callbackQuery(/^sub_recheck:(.+)$/, async (ctx) => {
+    const shortCode = ctx.match?.[1] ?? '';
+    if (!shortCode) {
+      await ctx.answerCallbackQuery('短码无效');
+      return;
+    }
+    await ctx.answerCallbackQuery('正在验证，请稍候...');
     await handleResourceRequest(ctx, shortCode);
   });
 }
