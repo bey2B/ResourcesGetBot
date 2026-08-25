@@ -35,6 +35,7 @@ export class MemoryD1 {
   rateLimits: Row[] = [];
   settings: Row[] = [];
   ads: Row[] = [];
+  purchases: Row[] = [];
 
   private nextId: Record<string, number> = {
     users: 1,
@@ -43,8 +44,8 @@ export class MemoryD1 {
     checkins: 1,
     pointsLogs: 1,
     ads: 1,
+    purchases: 1,
   };
-
   private lastInsertId = 0;
 
   prepare(sql: string): D1PreparedStatement {
@@ -202,6 +203,11 @@ export class MemoryD1 {
         (row) => row.position === values[0] && row.enabled === 1,
       );
     }
+    if (table === 'purchases') {
+      return this.purchases.filter(
+        (row) => row.user_id === values[0] && row.resource_id === values[1],
+      );
+    }
     return [];
   }
 
@@ -300,6 +306,24 @@ export class MemoryD1 {
         created_at: values[2] ?? nowIso(),
       };
       this.downloads.push(row);
+      this.lastInsertId = row.id as number;
+      return 1;
+    }
+    if (table === 'purchases') {
+      const duplicate = this.purchases.some(
+        (row) => row.user_id === values[0] && row.resource_id === values[1],
+      );
+      if (duplicate) {
+        return 0;
+      }
+      const row: Row = {
+        id: this.nextId.purchases++,
+        user_id: values[0],
+        resource_id: values[1],
+        price: values[2],
+        created_at: values[3] ?? nowIso(),
+      };
+      this.purchases.push(row);
       this.lastInsertId = row.id as number;
       return 1;
     }
