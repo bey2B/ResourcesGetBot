@@ -107,9 +107,7 @@ export const BROADCAST_CONFIRM_SCHEDULE_CALLBACK = 'broadcast:confirm:schedule';
 export const BROADCAST_CONFIRM_CANCEL_CALLBACK = 'broadcast:confirm:cancel';
 
 export const BROADCAST_ENTRY_TEMPLATE = `您正在向 xxx 位用户发送广播消息
-
 请向我发送或转发一条消息，消息内容可以是任何形式——文字、照片、视频，甚至是贴纸。您还可以转发频道中的消息，以便查看其实际浏览量。
-
 输入 /cancel 取消操作。`;
 
 export function buildBroadcastEntryText(userCount: number): string {
@@ -117,19 +115,15 @@ export function buildBroadcastEntryText(userCount: number): string {
 }
 
 export const BROADCAST_CONFIRMATION_TEXT = `已收到广播内容，请确认：
-
 立即发送：马上向全部用户发送
 定时发送：设置发送时间后发送
-
 请选择下方按钮，或输入 /cancel 取消。`;
 
 export const BROADCAST_SCHEDULE_PROMPT = `请输入定时发送时间：
-
 /bc_once YYYY-MM-DD HH:MM - 一次性定时
 /bc_daily HH:MM - 每天定时
 /bc_weekly HH:MM - 每周定时
 /bc_monthly 日(1-28) HH:MM - 每月定时
-
 输入 /cancel 取消操作。`;
 
 export const BROADCAST_CANCELLED_TEXT = '已取消本次广播，内容已丢弃。';
@@ -182,7 +176,6 @@ const BROADCAST_HELP = `广播命令：
 /bc_monthly <日(1-28)> <HH:MM> <内容> - 每月定时广播
 /bc_list [页码] - 查看广播记录
 /bc_cancel <ID> - 取消定时广播
-
 转发媒体给本 Bot：说明以 /bc 开头即广播（如 /bc 今日推荐、/bc_daily 10:00 早报），否则自动入库。
 转发文本给本 Bot：立即广播该文本。`;
 
@@ -328,11 +321,18 @@ export function nextOccurrenceOfTime(hours: number, minutes: number, now = new D
   if (!isValidTime(hours, minutes)) {
     throw new AppError('时间格式无效', 400, 'VALIDATION_ERROR');
   }
+  // 用户输入为本地时间(Asia/Shanghai, UTC+8)，构造带偏移的时间字符串由 JS 解析为绝对 UTC 时刻
+  const todayLocal = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
   const candidate = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hours, minutes, 0, 0),
+    `${todayLocal}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00+08:00`,
   );
   if (candidate.getTime() <= now.getTime()) {
-    candidate.setUTCDate(candidate.getUTCDate() + 1);
+    candidate.setTime(candidate.getTime() + 86_400_000);
   }
   return candidate;
 }
@@ -350,11 +350,18 @@ export function nextMonthlyOccurrence(
   if (!isValidTime(hours, minutes)) {
     throw new AppError('时间格式无效', 400, 'VALIDATION_ERROR');
   }
+  // 用户输入为本地时间(Asia/Shanghai, UTC+8)
+  const localYM = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+  }).format(now);
+  const [yearStr, monthStr] = localYM.split('-');
   const candidate = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), day, hours, minutes, 0, 0),
+    `${yearStr}-${monthStr}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00+08:00`,
   );
   if (candidate.getTime() <= now.getTime()) {
-    candidate.setUTCMonth(candidate.getUTCMonth() + 1);
+    candidate.setMonth(candidate.getMonth() + 1);
   }
   return candidate;
 }
@@ -406,7 +413,9 @@ export function parseScheduleArgs(
     if (!isValidDateParts(year, month, day) || !isValidTime(hours, minutes)) {
       return { ok: false, message: '日期或时间无效' };
     }
-    const date = new Date(Date.UTC(year, month - 1, day, hours, minutes, 0, 0));
+    const date = new Date(
+      `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00+08:00`,
+    );
     if (date.getTime() <= now.getTime()) {
       return { ok: false, message: '定时时间必须晚于当前时间' };
     }
@@ -600,14 +609,12 @@ export async function executeBroadcast(
       nextScheduledAt: broadcast.scheduled_at,
     };
   }
-
   const content = parseBroadcastContent(broadcast.content);
   const userIds = await listUserIdsForBroadcast(db);
   const counts = { success: 0, fail: 0, skip: 0 };
   const errors: string[] = [];
   const sleep = options.sleep ?? defaultSleep;
   const delayMs = options.delayMs ?? DEFAULT_BATCH_DELAY_MS;
-
   for (const userId of userIds) {
     const outcome = await sendWithRetry(userId, content, deliverer, options);
     if (outcome.result === 'success') {
@@ -627,7 +634,6 @@ export async function executeBroadcast(
       await sleep(delayMs);
     }
   }
-
   const total = userIds.length;
   await updateBroadcastProgress(db, broadcast.id, {
     totalCount: total,
@@ -635,7 +641,6 @@ export async function executeBroadcast(
     failCount: counts.fail,
     skipCount: counts.skip,
   });
-
   let status: BroadcastStatus;
   let nextScheduledAt: string | null = null;
   const isRecurring =
@@ -658,14 +663,12 @@ export async function executeBroadcast(
           : 'failed';
     await finishBroadcast(db, broadcast.id, status);
   }
-
   await safeWriteAdminLog(
     db,
     broadcast.created_by,
     'broadcast_finished',
     `id=${broadcast.id} type=${broadcast.type} total=${total} success=${counts.success} fail=${counts.fail} skip=${counts.skip} status=${status}`,
   );
-
   return {
     broadcastId: broadcast.id,
     status,
@@ -679,7 +682,7 @@ export async function executeBroadcast(
   };
 }
 
-function buildBroadcastReport(report: BroadcastProgressReport): string {
+export function buildBroadcastReport(report: BroadcastProgressReport): string {
   const lines = [
     `广播 #${report.broadcastId} 执行完成`,
     `总计：${report.total}`,
@@ -919,7 +922,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
   bot.chatType('private').callbackQuery(BROADCAST_START_CALLBACK, async (ctx) => {
     await startBroadcastEntry(ctx);
   });
-
   bot.chatType('private').command('cancel', async (ctx, next) => {
     const from = ctx.from;
     if (!from || !getBroadcastDraft(from.id)) {
@@ -928,7 +930,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
     }
     await cancelBroadcastDraft(ctx, from.id);
   });
-
   bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_NOW_CALLBACK, async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -937,7 +938,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
     }
     await confirmBroadcastNow(ctx, adminId);
   });
-
   bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_SCHEDULE_CALLBACK, async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -946,7 +946,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
     }
     await enterBroadcastScheduleMode(ctx, adminId);
   });
-
   bot.chatType('private').callbackQuery(BROADCAST_CONFIRM_CANCEL_CALLBACK, async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -957,7 +956,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
     await ctx.answerCallbackQuery(removed ? '已取消广播' : '当前没有待发送的广播');
     await ctx.reply(removed ? BROADCAST_CANCELLED_TEXT : '当前没有待发送的广播。');
   });
-
   // 广播草稿状态下优先接管文本/媒体；无草稿时放行给下游处理器。
   bot.chatType('private').on('message:text', async (ctx, next) => {
     const from = ctx.from;
@@ -977,7 +975,6 @@ export function registerBroadcastConfirmationHandlers(bot: Bot<BotContext>): voi
     }
     await enterBroadcastDraft(ctx, from.id, { kind: 'text', text });
   });
-
   bot.chatType('private').on('message:media', async (ctx, next) => {
     const from = ctx.from;
     const draft = from ? getBroadcastDraft(from.id) : null;
@@ -1002,7 +999,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await ctx.reply(BROADCAST_HELP);
   });
-
   bot.chatType('private').command('bc', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1015,7 +1011,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await enterBroadcastDraft(ctx, adminId, { kind: 'text', text: args });
   });
-
   bot.chatType('private').command('broadcast', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1028,7 +1023,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await enterBroadcastDraft(ctx, adminId, { kind: 'text', text: args });
   });
-
   bot.chatType('private').command('bc_once', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1036,7 +1030,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await scheduleTextBroadcast(ctx, adminId, 'once', ctx.match ?? '');
   });
-
   bot.chatType('private').command('bc_daily', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1044,7 +1037,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await scheduleTextBroadcast(ctx, adminId, 'daily', ctx.match ?? '');
   });
-
   bot.chatType('private').command('bc_weekly', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1052,7 +1044,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await scheduleTextBroadcast(ctx, adminId, 'weekly', ctx.match ?? '');
   });
-
   bot.chatType('private').command('bc_monthly', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1060,7 +1051,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await scheduleTextBroadcast(ctx, adminId, 'monthly', ctx.match ?? '');
   });
-
   bot.chatType('private').command('bc_list', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1082,7 +1072,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     });
     await ctx.reply(`广播记录（第 ${page} 页）：\n${lines.join('\n\n')}`);
   });
-
   bot.chatType('private').command('bc_cancel', async (ctx) => {
     const adminId = await requireAdmin(ctx);
     if (adminId === null) {
@@ -1107,7 +1096,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     await safeWriteAdminLog(ctx.env.DB, adminId, 'broadcast_cancel', `id=${id} type=${row.type}`);
     await ctx.reply(`广播 #${id} 已取消。`);
   });
-
   // 转发媒体：说明以 /bc 开头时执行广播；否则交给后面的管理员入库处理器。
   bot.chatType('private').on('message:media', async (ctx, next) => {
     let command: MediaBroadcastCommand | null = null;
@@ -1159,7 +1147,6 @@ export function registerBroadcastHandlers(bot: Bot<BotContext>): void {
     }
     await enterBroadcastDraft(ctx, adminId, { kind: 'media', media: payload });
   });
-
   // 转发文本：管理员转发消息给 Bot 时进入二次确认草稿。
   bot.chatType('private').on('message:text', async (ctx, next) => {
     const msg = ctx.message;
