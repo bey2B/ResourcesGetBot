@@ -1,6 +1,7 @@
 /**
  * 资源处理器：短码查询、限流、强制关注、免费/付费购买与文件交付。
  */
+
 import { InlineKeyboard, type Bot } from 'grammy';
 import {
   getResourceByShortCode,
@@ -184,19 +185,21 @@ export async function handleResourceRequest(
     subscriptionOk = check.ok;
     if (!check.ok) {
       const keyboard = new InlineKeyboard();
-      const numericChannels: string[] = [];
-      for (const channel of check.missingChannels) {
-        const handle = channel.startsWith('@') ? channel.slice(1) : null;
-        if (handle) {
-          keyboard.url(`加入 ${channel}`, `https://t.me/${handle}`).row();
+      const noLinkChannels: string[] = [];
+      for (const ch of check.channels.filter((c) => c.status === 'not_member')) {
+        const url = ch.inviteUrl || (ch.channel.startsWith('@')
+          ? `https://t.me/${ch.channel.slice(1)}`
+          : null);
+        if (url) {
+          keyboard.url(`加入 ${ch.display}`, url).row();
         } else {
-          numericChannels.push(channel);
+          noLinkChannels.push(ch.display);
         }
       }
       keyboard.text('我已加入', `sub_recheck:${shortCode}`);
       const lines = ['您需要加入以下频道才能使用：'];
-      if (numericChannels.length > 0) {
-        lines.push(numericChannels.join('\n'));
+      if (noLinkChannels.length > 0) {
+        lines.push(noLinkChannels.join('\n'));
       }
       const msg = await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
       messageIds.push(msg.message_id);
