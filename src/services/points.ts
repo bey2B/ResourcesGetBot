@@ -238,7 +238,7 @@ export async function purchaseResource(
   }
   const user = await getUser(db, userId);
   if (!user) {
-    return failResult('user_not_found', '用户不存在，请先发送 /start 注册。', user?.points ?? null);
+    return failResult('user_not_found', '用户不存在，请先发送 /start 注册。', null);
   }
   if (user.is_banned) {
     return failResult('banned', '账号已被封禁，无法购买资源。', user.points);
