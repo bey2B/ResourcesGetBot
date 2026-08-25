@@ -9,6 +9,7 @@ import { parseBoolean, parseUniqueCsv } from '../utils/helpers';
 
 export const SUBSCRIPTION_ENABLED_KEY = 'force_subscribe_enabled';
 export const SUBSCRIPTION_CHANNELS_KEY = 'sub_channels';
+export const SUBSCRIPTION_INVITE_LINKS_KEY = 'sub_channel_invite_links';
 export const TELEGRAM_API_BASE = 'https://api.telegram.org';
 export const TELEGRAM_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -20,6 +21,7 @@ export interface SubscriptionChannelResult {
   display: string;
   status: SubscriptionChannelStatus;
   error?: string;
+  inviteUrl?: string;
 }
 
 export interface SubscriptionCheckResult {
@@ -33,6 +35,7 @@ export interface SubscriptionCheckResult {
 export interface ForceSubscribeSettings {
   enabled: boolean;
   channels: string[];
+  inviteLinks: Record<string, string>;
 }
 
 export type TelegramMemberFetchResult =
@@ -129,10 +132,24 @@ async function fetchTelegramMember(
 }
 
 export async function getForceSubscribeSettings(db: D1Database): Promise<ForceSubscribeSettings> {
-  const settings = await getSettings(db, [SUBSCRIPTION_ENABLED_KEY, SUBSCRIPTION_CHANNELS_KEY]);
+  const settings = await getSettings(db, [
+    SUBSCRIPTION_ENABLED_KEY,
+    SUBSCRIPTION_CHANNELS_KEY,
+    SUBSCRIPTION_INVITE_LINKS_KEY,
+  ]);
+  let inviteLinks: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(settings[SUBSCRIPTION_INVITE_LINKS_KEY] || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      inviteLinks = parsed as Record<string, string>;
+    }
+  } catch {
+    // 非 JSON 格式时静默忽略，兼容旧数据。
+  }
   return {
     enabled: parseBoolean(settings[SUBSCRIPTION_ENABLED_KEY], false),
     channels: parseSubChannels(settings[SUBSCRIPTION_CHANNELS_KEY]),
+    inviteLinks,
   };
 }
 
@@ -183,17 +200,15 @@ export async function checkForceSubscribe(
       missingChannels: [],
     };
   }
-
-  const channels = await Promise.all(
+  const channels = (await Promise.all(
     settings.channels.map((channel) =>
       verifyChannelMembership(options.botToken, channel, userId, options.fetcher),
     ),
-  );
+  )).map((ch) => ({ ...ch, inviteUrl: settings.inviteLinks[ch.channel] }));
   const missingChannels = channels
     .filter((channel) => channel.status === 'not_member')
     .map((channel) => channel.display);
   const errored = channels.filter((channel) => channel.status === 'error');
-
   if (errored.length > 0) {
     return {
       ok: false,
