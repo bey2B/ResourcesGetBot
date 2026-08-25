@@ -1,50 +1,42 @@
 /**
- * 群组处理器：群内发送纯短码消息时自动回复，支持配置自动删除。
+ * 群组处理器：群内收到短码时不直接发送资源，改为引导用户点击按钮跳转私聊获取。
+ * 资源消息在群内发送后会自动删除，避免资源泄露到群历史。
  */
 
+import { InlineKeyboard } from 'grammy';
 import type { Bot } from 'grammy';
-import { getSettings } from '../db/queries';
-import { parseBoolean } from '../utils/helpers';
-import { isValidShortCode } from '../utils/shortcode';
+import { getResourceByShortCode } from '../db/queries';
 import type { BotContext } from '../bot';
-import { handleResourceRequest } from './resource';
 
-export const GROUP_REPLY_ENABLED_KEY = 'group_reply_enabled';
-export const GROUP_AUTO_DELETE_SECONDS_KEY = 'group_auto_delete_seconds';
-export const DEFAULT_GROUP_AUTO_DELETE_SECONDS = 0;
+const SHORTCODE_RE = /^[a-z0-9]{8}$/i;
+const GROUP_DELETE_DELAY_MS = 60_000;
 
-/** 仅接受整条消息就是 8 位短码的文本，其他内容一律不回复。 */
-export function extractPureShortCode(text: string): string | null {
-  const trimmed = text.trim();
-  return isValidShortCode(trimmed) ? trimmed : null;
+/** 从群消息文本中提取纯短码（去除 @botname 后缀，统一小写）。 */
+export function extractPureShortCode(text: string | undefined): string | null {
+  if (!text) return null;
+  const trimmed = text.trim().toLowerCase();
+  if (!SHORTCODE_RE.test(trimmed)) return null;
+  return trimmed;
 }
 
-function parseAutoDeleteSeconds(raw: string | null | undefined): number {
-  const parsed = Number(raw ?? '');
-  return Number.isInteger(parsed) && parsed >= 0
-    ? parsed
-    : DEFAULT_GROUP_AUTO_DELETE_SECONDS;
+function buildGroupGuideKeyboard(botUsername: string, shortCode: string): InlineKeyboard {
+  return new InlineKeyboard().url(
+    '点击获取资源',
+    `https://t.me/${botUsername}?start=${shortCode}`,
+  );
 }
 
-async function safeDelete(ctx: BotContext, chatId: number, messageId: number): Promise<void> {
-  try {
-    await ctx.api.deleteMessage(chatId, messageId);
-  } catch {
-    // 消息可能已被用户或 Telegram 删除，静默跳过。
-  }
-}
-
-function scheduleDeletion(
+async function deleteMessageAfterDelay(
   ctx: BotContext,
-  chatId: number,
-  userMessageId: number,
-  botMessageIds: readonly number[],
-  seconds: number,
-): void {
+  messageId: number,
+  delayMs: number,
+): Promise<void> {
   const run = async (): Promise<void> => {
-    await safeDelete(ctx, chatId, userMessageId);
-    for (const messageId of botMessageIds) {
-      await safeDelete(ctx, chatId, messageId);
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    try {
+      await ctx.api.deleteMessage(ctx.chatId as number, messageId);
+    } catch {
+      // 消息可能已被删除或无权限，静默忽略。
     }
   };
   if (ctx.env.waitUntil) {
@@ -53,46 +45,31 @@ function scheduleDeletion(
   }
   setTimeout(() => {
     void run().catch(() => undefined);
-  }, seconds * 1000);
+  }, 0);
 }
 
 export function registerGroupHandlers(bot: Bot<BotContext>): void {
   bot.chatType(['group', 'supergroup']).on('message:text', async (ctx, next) => {
-    const text = ctx.message.text;
-    if (!text) {
-      await next();
-      return;
-    }
-    const shortCode = extractPureShortCode(text);
+    const shortCode = extractPureShortCode(ctx.message.text);
     if (!shortCode) {
       await next();
       return;
     }
-
-    const db = ctx.env.DB;
-    const settings = await getSettings(db, [
-      GROUP_REPLY_ENABLED_KEY,
-      GROUP_AUTO_DELETE_SECONDS_KEY,
-    ]);
-    if (!parseBoolean(settings[GROUP_REPLY_ENABLED_KEY], true)) {
+    const resource = await getResourceByShortCode(ctx.env.DB, shortCode);
+    if (!resource) {
       await next();
       return;
     }
-
-    const result = await handleResourceRequest(ctx, shortCode);
-    const autoDeleteSeconds = parseAutoDeleteSeconds(settings[GROUP_AUTO_DELETE_SECONDS_KEY]);
-    if (
-      autoDeleteSeconds > 0 &&
-      ctx.chat?.id !== undefined &&
-      ctx.msg?.message_id !== undefined
-    ) {
-      scheduleDeletion(
-        ctx,
-        ctx.chat.id,
-        ctx.msg.message_id,
-        result.messageIds,
-        autoDeleteSeconds,
-      );
-    }
+    const botInfo = await ctx.api.getMe();
+    const botUsername = botInfo.username;
+    const deleteDelaySec = Math.round(GROUP_DELETE_DELAY_MS / 1000);
+    const text =
+      `点击下方按钮查看\n` +
+      `资源名称：${resource.title || '未命名资源'}\n` +
+      `此消息将在 ${deleteDelaySec} 秒后删除`;
+    const sent = await ctx.reply(text, {
+      reply_markup: buildGroupGuideKeyboard(botUsername, shortCode),
+    });
+    await deleteMessageAfterDelay(ctx, sent.message_id, GROUP_DELETE_DELAY_MS);
   });
 }
