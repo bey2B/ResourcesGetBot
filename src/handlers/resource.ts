@@ -191,13 +191,13 @@ export async function handleResourceRequest(
           ? `https://t.me/${ch.channel.slice(1)}`
           : null);
         if (url) {
-          keyboard.url(`加入 ${ch.display}`, url).row();
+          keyboard.url(`🔥烧鸡收藏夹|清澈分类`, url).row();
         } else {
           noLinkChannels.push(ch.display);
         }
       }
-      keyboard.text('我已加入', `sub_recheck:${shortCode}`);
-      const lines = ['您需要加入以下频道才能使用：'];
+      keyboard.text('✅我已加入', `sub_recheck:${shortCode}`);
+      const lines = ['⬇️您需要加入以下频道才能使用：'];
       if (noLinkChannels.length > 0) {
         lines.push(noLinkChannels.join('\n'));
       }
