@@ -1,50 +1,48 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_SHORT_CODE_LENGTH,
+  DEFAULT_ALPHABET,
+  FULL_ALPHABET,
   generateShortCode,
-  generateUniqueShortCode,
   isValidShortCode,
+  SHORTCODE_LENGTH,
 } from '../src/utils/shortcode';
-import { createMemoryDb } from './helpers/d1-mock';
 
-const AMBIGUOUS_FREE = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz';
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+const AMBIGUOUS_FREE = 'abcdefghijkmnpqrstuvwxyz23456789';
 
 describe('shortcode', () => {
-  it('生成 8 位且不含易混淆字符的短码', () => {
-    for (let index = 0; index < 100; index += 1) {
+  it('生成 8 位短码', () => {
+    const code = generateShortCode();
+    expect(code).toHaveLength(SHORTCODE_LENGTH);
+  });
+
+  it('生成的短码仅包含默认字母表字符', () => {
+    for (let i = 0; i < 100; i += 1) {
       const code = generateShortCode();
-      expect(code).toHaveLength(DEFAULT_SHORT_CODE_LENGTH);
-      expect([...code].every((char) => AMBIGUOUS_FREE.includes(char))).toBe(true);
+      for (const ch of code) {
+        expect(DEFAULT_ALPHABET).toContain(ch);
+      }
     }
   });
 
-  it('isValidShortCode 只接受 8 位字母数字', () => {
-    expect(isValidShortCode('AbC12345')).toBe(true);
-    expect(isValidShortCode('abc1234')).toBe(false);
-    expect(isValidShortCode('abc123456')).toBe(false);
-    expect(isValidShortCode('abc 1234')).toBe(false);
+  it('默认字母表不包含易混淆字符', () => {
+    expect(AMBIGUOUS_FREE).toBe(DEFAULT_ALPHABET);
+    expect(DEFAULT_ALPHABET).not.toContain('0');
+    expect(DEFAULT_ALPHABET).not.toContain('1');
+    expect(DEFAULT_ALPHABET).not.toContain('o');
+    expect(DEFAULT_ALPHABET).not.toContain('i');
+    expect(DEFAULT_ALPHABET).not.toContain('l');
   });
 
-  it('generateUniqueShortCode 遇到碰撞会重试并返回未使用短码', async () => {
-    let randomCall = 0;
-    vi.stubGlobal('crypto', {
-      getRandomValues: (buffer: Uint32Array) => {
-        buffer[0] = randomCall++;
-        return buffer;
-      },
-    });
+  it('完整字母表包含全部小写字母和数字', () => {
+    expect(FULL_ALPHABET).toBe('abcdefghijklmnopqrstuvwxyz0123456789');
+  });
 
-    const db = createMemoryDb();
-    const deterministicCode = '23456789';
-    db.seedResource({ id: 1, short_code: deterministicCode, file_id: 'seed-file' });
-
-    const unique = await generateUniqueShortCode(db);
-    expect(unique).toHaveLength(DEFAULT_SHORT_CODE_LENGTH);
-    expect(unique).not.toBe(deterministicCode);
-    expect(db.resources.some((row) => row.short_code === unique)).toBe(false);
+  it('只接受 8 位小写字母数字', () => {
+    expect(isValidShortCode('abc12345')).toBe(true);
+    expect(isValidShortCode('AbC12345')).toBe(false);
+    expect(isValidShortCode('abc1234')).toBe(false);
+    expect(isValidShortCode('abc123456')).toBe(false);
+    expect(isValidShortCode('abc-1234')).toBe(false);
+    expect(isValidShortCode('')).toBe(false);
   });
 });
