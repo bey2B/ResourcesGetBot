@@ -37,7 +37,9 @@ function pickSortColumn(
 }
 
 function hourLabel(date: Date): string {
-  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())} ${pad2(date.getUTCHours())}:00`;
+  // 与 SQL 中的 '+8 hours' 偏移保持一致，生成本地时区小时标签
+  const shifted = new Date(date.getTime() + 8 * 3_600_000);
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())} ${pad2(shifted.getUTCHours())}:00`;
 }
 
 // ---------- 行类型（后续任务统一收敛到 src/types.ts） ----------
@@ -113,6 +115,7 @@ export type BroadcastStatus =
   | 'failed'
   | 'cancelled'
   | 'scheduled';
+
 export type BroadcastType = 'now' | 'once' | 'daily' | 'weekly' | 'monthly';
 
 export interface BroadcastRow {
@@ -911,7 +914,7 @@ export async function getUserPurchasedResources(
   db: D1Database,
   userId: number,
 ): Promise<ResourceRow[]> {
-  // “我已购买的资源”只展示付费资源
+  // "我已购买的资源"只展示付费资源
   const result = await db
     .prepare(
       `SELECT r.* FROM resources r
@@ -1570,7 +1573,6 @@ export async function updateAdMessage(
       .run();
     return getAdMessage(db, adId);
   }
-
   const sets: string[] = [];
   const values: (string | number | boolean | null)[] = [];
   if (patch.text !== undefined) {
@@ -1904,16 +1906,26 @@ function fillDailySeries(rows: DailyCountRow[], days: number): DailyCountRow[] {
   const series: DailyCountRow[] = [];
   const now = new Date();
   for (let offset = days - 1; offset >= 0; offset -= 1) {
-    const date = new Date(now.getTime() - offset * 86_400_000).toISOString().slice(0, 10);
+    // 与 SQL 中的 '+8 hours' 偏移保持一致，生成本地时区日期标签
+    const shifted = new Date(now.getTime() - offset * 86_400_000 + 8 * 3_600_000);
+    const date = shifted.toISOString().slice(0, 10);
     series.push({ date, count: byDate.get(date) ?? 0 });
   }
   return series;
 }
 
 export async function getDashboardOverview(db: D1Database): Promise<DashboardOverview> {
-  const today = utcToday();
-  const todayStart = `${today}T00:00:00.000Z`;
-  const tomorrowStart = startOfNextUtcDay();
+  // 按 Asia/Shanghai 时区计算"今日"范围，转换为 UTC ISO 字符串查询
+  const todayLocal = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const todayStart = new Date(`${todayLocal}T00:00:00+08:00`).toISOString();
+  const tomorrowStart = new Date(
+    new Date(`${todayLocal}T00:00:00+08:00`).getTime() + 86_400_000,
+  ).toISOString();
   const results = await db.batch<Record<string, unknown>>([
     db.prepare('SELECT COUNT(*) AS value FROM users'),
     db.prepare('SELECT COUNT(*) AS value FROM resources'),
@@ -1930,7 +1942,7 @@ export async function getDashboardOverview(db: D1Database): Promise<DashboardOve
     db
       .prepare('SELECT COUNT(*) AS value FROM downloads WHERE created_at >= ? AND created_at < ?')
       .bind(todayStart, tomorrowStart),
-    db.prepare('SELECT COUNT(*) AS value FROM checkins WHERE date = ?').bind(today),
+    db.prepare('SELECT COUNT(*) AS value FROM checkins WHERE date = ?').bind(todayLocal),
     db.prepare(
       `SELECT
          COALESCE(SUM(CASE WHEN change > 0 THEN change ELSE 0 END), 0) AS issued,
@@ -1958,9 +1970,9 @@ export async function getNewUsersByDay(db: D1Database, days = 7): Promise<DailyC
   const since = daysAgoIso(days - 1);
   const result = await db
     .prepare(
-      `SELECT date(created_at) AS date, COUNT(*) AS count
+      `SELECT date(created_at, '+8 hours') AS date, COUNT(*) AS count
        FROM users WHERE created_at >= ?
-       GROUP BY date(created_at) ORDER BY date ASC`,
+       GROUP BY date(created_at, '+8 hours') ORDER BY date ASC`,
     )
     .bind(since)
     .all<DailyCountRow>();
@@ -1971,9 +1983,9 @@ export async function getActiveUsersByDay(db: D1Database, days = 7): Promise<Dai
   const since = daysAgoIso(days - 1);
   const result = await db
     .prepare(
-      `SELECT date(last_active) AS date, COUNT(DISTINCT user_id) AS count
+      `SELECT date(last_active, '+8 hours') AS date, COUNT(DISTINCT user_id) AS count
        FROM users WHERE last_active IS NOT NULL AND last_active >= ?
-       GROUP BY date(last_active) ORDER BY date ASC`,
+       GROUP BY date(last_active, '+8 hours') ORDER BY date ASC`,
     )
     .bind(since)
     .all<DailyCountRow>();
@@ -1984,9 +1996,9 @@ export async function getDownloadsByDay(db: D1Database, days = 7): Promise<Daily
   const since = daysAgoIso(days - 1);
   const result = await db
     .prepare(
-      `SELECT date(created_at) AS date, COUNT(*) AS count
+      `SELECT date(created_at, '+8 hours') AS date, COUNT(*) AS count
        FROM downloads WHERE created_at >= ?
-       GROUP BY date(created_at) ORDER BY date ASC`,
+       GROUP BY date(created_at, '+8 hours') ORDER BY date ASC`,
     )
     .bind(since)
     .all<DailyCountRow>();
@@ -2000,7 +2012,7 @@ export async function getHourlyDownloadStats(
   const since = new Date(Date.now() - hours * 3_600_000).toISOString();
   const result = await db
     .prepare(
-      `SELECT strftime('%Y-%m-%d %H:00', created_at) AS hour, COUNT(*) AS count
+      `SELECT strftime('%Y-%m-%d %H:00', created_at, '+8 hours') AS hour, COUNT(*) AS count
        FROM downloads WHERE created_at >= ?
        GROUP BY hour ORDER BY hour ASC`,
     )
@@ -2023,7 +2035,7 @@ export async function getDownloadActivityByHour(
   const since = daysAgoIso(days - 1);
   const result = await db
     .prepare(
-      `SELECT CAST(strftime('%H', created_at) AS INTEGER) AS hour, COUNT(*) AS count
+      `SELECT CAST(strftime('%H', created_at, '+8 hours') AS INTEGER) AS hour, COUNT(*) AS count
        FROM downloads WHERE created_at >= ?
        GROUP BY hour ORDER BY hour ASC`,
     )
