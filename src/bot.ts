@@ -14,7 +14,7 @@ import {
 import { registerGroupHandlers } from './handlers/group';
 import { registerPointsHandlers } from './handlers/points';
 import { registerPurchasesHandlers } from './handlers/purchases';
-import { registerResourceHandlers } from './handlers/resource';
+import { registerResourceHandlers, registerSubscriptionRecheckHandler } from './handlers/resource';
 import { registerResourceStorageHandlers } from './handlers/resource-storage';
 import { registerSettingsHandlers } from './handlers/settings';
 import { registerStartHandlers } from './handlers/start';
@@ -75,6 +75,7 @@ export function registerHandlers(botInstance: Bot<BotContext>): void {
   registerResourceStorageHandlers(botInstance);
   registerAdConfigHandlers(botInstance);
   registerResourceHandlers(botInstance);
+  registerSubscriptionRecheckHandler(botInstance);
   registerGroupHandlers(botInstance);
   registerPointsHandlers(botInstance);
   registerPurchasesHandlers(botInstance);
