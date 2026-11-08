@@ -10,6 +10,7 @@ import {
   resetCheckinsBeforeDate,
   setSetting,
 } from './db/queries';
+import { recoverStaleBroadcasts } from './db/broadcast-batch';
 import {
   executeBroadcast,
   type BroadcastDeliverer,
@@ -47,10 +48,19 @@ export interface StatsPreaggregationResult {
 
 export interface BroadcastCronOptions extends BroadcastExecutionOptions {
   now?: Date;
+  /**
+   * sending 状态视为「陈旧」的阈值（分钟），默认 5。
+   * 批量发送时每 50 个用户会刷新一次 updated_at，所以正常批次的 updated_at
+   * 最多滞后几十秒；超过 5 分钟仍未更新，说明 Worker 已被终止。
+   * 阈值不宜过小，否则会把仍在正常发送的批次误判为陈旧并重复发送。
+   */
+  staleSendingMinutes?: number;
 }
 
 export interface BroadcastCronResult {
   checked: number;
+  /** 本轮恢复为 pending 的陈旧 sending 广播数量。 */
+  recovered: number;
   executed: BroadcastProgressReport[];
   errors: string[];
 }
@@ -120,8 +130,9 @@ export async function runStatsPreaggregation(
 }
 
 /**
- * 定时广播检查：扫描 status IN (pending, scheduled) 且已到期的广播，
- * 逐条串行执行；单条失败不会中断其余广播。
+ * 定时广播检查：每轮先把被终止打断、陈旧卡在 sending 的广播恢复为 pending，
+ * 再扫描到期的 pending/scheduled 广播。每条广播本轮只处理一个批次，
+ * 剩余用户由下一轮（每分钟）Cron 从游标继续；单条失败不会中断其余广播。
  */
 export async function runBroadcastCron(
   db: D1Database,
@@ -129,14 +140,27 @@ export async function runBroadcastCron(
   options: BroadcastCronOptions = {},
 ): Promise<BroadcastCronResult> {
   const now = options.now ?? new Date();
+  const errors: string[] = [];
+  // 恢复陈旧 sending：这是「永久发送中」的兜底，必须在扫描到期广播之前执行。
+  const staleMinutes = Math.max(options.staleSendingMinutes ?? 5, 1);
+  let recovered = 0;
+  try {
+    recovered = await recoverStaleBroadcasts(
+      db,
+      new Date(now.getTime() - staleMinutes * 60_000).toISOString(),
+      now.toISOString(),
+    );
+  } catch (err) {
+    errors.push(`恢复陈旧广播失败：${errorMessage(err)}`);
+  }
   let due: Awaited<ReturnType<typeof getDueBroadcasts>> = [];
   try {
     due = await getDueBroadcasts(db, now.toISOString());
   } catch (err) {
-    return { checked: 0, executed: [], errors: [`读取到期广播失败：${errorMessage(err)}`] };
+    errors.push(`读取到期广播失败：${errorMessage(err)}`);
+    return { checked: 0, recovered, executed: [], errors };
   }
   const executed: BroadcastProgressReport[] = [];
-  const errors: string[] = [];
   for (const broadcast of due) {
     try {
       executed.push(await executeBroadcast(db, broadcast, deliverer, options));
@@ -144,7 +168,7 @@ export async function runBroadcastCron(
       errors.push(`广播 #${broadcast.id} 执行失败：${errorMessage(err)}`);
     }
   }
-  return { checked: due.length, executed, errors };
+  return { checked: due.length, recovered, executed, errors };
 }
 
 export interface ScheduledTasksResult {

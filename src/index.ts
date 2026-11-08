@@ -23,8 +23,54 @@ const WEBHOOK_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 const CRON_DAILY_MAINTENANCE = '0 0 * * *';
 /** 每 15 分钟：检查并执行到期的定时广播。 */
 const CRON_BROADCAST_CHECK = '*/15 * * * *';
+/** 每分钟：广播分批续发的主力触发器，同时兜底恢复陈旧 sending。 */
+const CRON_BROADCAST_TICK = '* * * * *';
 /** 每日 UTC 0:30：预聚合统计快照，避开 0 点维护任务。 */
 const CRON_STATS_PREAGGREGATION = '30 0 * * *';
+
+/**
+ * 广播检查的共用实现：每轮先恢复陈旧 sending，再让每条到期广播各发一个批次。
+ * 只在「全部发完」或出错时通知管理员，避免每分钟刷屏；批次进度写 console 日志。
+ */
+async function runBroadcastTick(env: Env): Promise<void> {
+  const bot = createBot(buildBotEnv(env));
+  const result = await runBroadcastCron(env.DB, createTelegramDeliverer(bot.api));
+  console.log(
+    `[cron] broadcast tick: due=${result.checked} recovered=${result.recovered} executed=${result.executed.length} errors=${result.errors.length}`,
+  );
+  for (const report of result.executed) {
+    if (!report.finished) {
+      console.log(
+        `[cron] broadcast #${report.broadcastId} batch done: processed=${report.processed} success=${report.success} fail=${report.fail} skip=${report.skip} next=${report.nextScheduledAt ?? '-'}`,
+      );
+    }
+  }
+  if (result.errors.length > 0) {
+    console.error('[cron] broadcast errors', result.errors.join('; '));
+  }
+  const finishedReports = result.executed.filter((report) => report.finished);
+  // 没有广播彻底发完、也没有错误时，不打扰管理员。
+  if (finishedReports.length === 0 && result.errors.length === 0) {
+    return;
+  }
+  const adminIds = parseAdminIds(env.ADMIN_IDS);
+  const firstAdmin = adminIds[0];
+  if (!firstAdmin) {
+    return;
+  }
+  const lines: string[] = [];
+  for (const report of finishedReports) {
+    lines.push(buildBroadcastReport(report));
+  }
+  for (const err of result.errors) {
+    lines.push(`⚠️ ${err}`);
+  }
+  try {
+    await bot.api.sendMessage(firstAdmin, lines.join('\n\n---\n\n'));
+  } catch (err) {
+    console.error('[cron] notify admin failed', errorMessage(err));
+  }
+}
 
 const CRON_HANDLERS: Record<string, (env: Env) => Promise<void>> = {
   [CRON_DAILY_MAINTENANCE]: async (env) => {
@@ -33,37 +79,8 @@ const CRON_HANDLERS: Record<string, (env: Env) => Promise<void>> = {
       `[cron] daily maintenance: clearedCheckins=${result.clearedCheckins} clearedRateLimits=${result.clearedRateLimits}`,
     );
   },
-  [CRON_BROADCAST_CHECK]: async (env) => {
-    const bot = createBot(buildBotEnv(env));
-    const result = await runBroadcastCron(
-      env.DB,
-      createTelegramDeliverer(bot.api),
-    );
-    console.log(
-      `[cron] broadcast check: due=${result.checked} executed=${result.executed.length} errors=${result.errors.length}`,
-    );
-    if (result.errors.length > 0) {
-      console.error('[cron] broadcast errors', result.errors.join('; '));
-    }
-    if (result.executed.length > 0 || result.errors.length > 0) {
-      const adminIds = parseAdminIds(env.ADMIN_IDS);
-      const firstAdmin = adminIds[0];
-      if (firstAdmin) {
-        const lines: string[] = [];
-        for (const report of result.executed) {
-          lines.push(buildBroadcastReport(report));
-        }
-        for (const err of result.errors) {
-          lines.push(`⚠️ ${err}`);
-        }
-        try {
-          await bot.api.sendMessage(firstAdmin, lines.join('\n\n---\n\n'));
-        } catch (err) {
-          console.error('[cron] notify admin failed', errorMessage(err));
-        }
-      }
-    }
-  },
+  [CRON_BROADCAST_CHECK]: runBroadcastTick,
+  [CRON_BROADCAST_TICK]: runBroadcastTick,
   [CRON_STATS_PREAGGREGATION]: async (env) => {
     const result = await runStatsPreaggregation(env.DB);
     console.log(
