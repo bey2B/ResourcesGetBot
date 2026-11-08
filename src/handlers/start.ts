@@ -8,7 +8,7 @@ import { rewardInvite } from '../services/points';
 import { checkForceSubscribe } from '../services/subscription';
 import { isValidShortCode } from '../utils/shortcode';
 import type { BotContext } from '../bot';
-import { ensureUser, handleResourceRequest } from './resource';
+import { buildSubscribePrompt, ensureUser, handleResourceRequest } from './resource';
 
 export type StartPayload =
   | { type: 'none' }
@@ -112,7 +112,13 @@ async function handleShortCodeStart(ctx: BotContext, shortCode: string): Promise
     botToken: ctx.env.BOT_TOKEN,
   });
   if (!check.ok) {
-    await ctx.reply(check.message);
+    // 与私聊发短码路径共用同一套提示：必须带可点击的加入按钮
+    const prompt = buildSubscribePrompt(check, shortCode);
+    if (prompt) {
+      await ctx.reply(prompt.text, { reply_markup: prompt.keyboard });
+    } else {
+      await ctx.reply(check.message);
+    }
     return;
   }
   await handleResourceRequest(ctx, shortCode, { skipSubscriptionCheck: true });
