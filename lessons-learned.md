@@ -89,3 +89,15 @@
 
 - 本机 npm 在“父项目目录含 package.json + `npm --prefix <子目录> install`”时会自动把父项目写成 `file:..` 依赖；根目录 build 脚本应改为 `cd admin && npm install && npm run build`。清理自引用时还要删掉 `admin/node_modules/.package-lock.json` 与 `admin/package-lock.json` 后重新生成，否则 npm 会从旧锁/链接状态把自引用写回。
 - 本机 wrangler 4.120 的 `deploy --dry-run` 会打印 `--dry-run: exiting now.` 但进程因 `exitProcess(false)` 不退出；构建脚本用 `scripts/wrangler-dry-run.mjs` 子进程包装，检测到完成标记后结束子进程即可。超时残留的 wrangler/workerd 进程会锁住 `.wrangler` 本地状态，重跑 `db:local` 前必须先清理。
+
+## 广播分批发送经验（生产事故 #10/#11/#12）
+
+- Worker 的 `waitUntil` 只是延长存活，不是队列：10,703 用户 × 35ms ≈ 374 秒，必然被终止。凡是「遍历全量表」的后台任务，都必须先按批切分并持久化游标。
+- 游标用 `user_id > ? ORDER BY user_id LIMIT ?` 而不是 OFFSET：不随表增长而变慢，中断后可从断点续发，天然不重头。
+- 判断「还有没有下一批」时多取一条（`LIMIT batchSize+1`，只发前 batchSize 个）：否则用户数正好是批大小整数倍时要多跑一轮空批次才能收尾。
+- 进度不能只在循环结束写一次：每处理 50 人落盘一次游标和计数，Worker 被杀时最多重复 50 人，而不是整批 300 人。
+- 状态机要能自愈：`sending` 是「有进程正在发」的声明，进程死了声明就悬空。Cron 每轮先把 `updated_at` 超阈值（默认 5 分钟）的 sending 恢复成 pending，是消灭「永久发送中」的关键。
+- 陈旧阈值不能设太小：阈值小于正常批次的执行时长，会把仍在发送的批次误判为陈旧而重复群发；定期刷新 `updated_at` + 5 分钟阈值比「2 分钟硬编码」安全。
+- 单测直接跑真 SQL 更可靠：用 Node 22 的 `node:sqlite` 建内存库并加载真实 `schema.sql`，比手写 SQL 字符串匹配的 mock 更能发现漏加字段这类问题；tsconfig 缺 node 类型时，在 `tests/*.d.ts` 里单独声明用到的模块即可。
+- 恢复历史卡死广播等于「补发」：部署后第一轮 Cron 会真的把内容发给全部用户，这是有外部影响的操作，迁移脚本里要把「加字段」和「是否补发」拆成两段，由人决定。
+- 只能整文件推送的仓库（如无 git 凭据、只有 MCP 整文件接口）不要去手写重发 2000 行大文件：把新增逻辑独立成新模块，让大文件保持与上游逐字节一致，可靠性远高于逐字转录，也能用 blob SHA 逐文件校验。
