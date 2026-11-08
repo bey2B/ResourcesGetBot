@@ -14,7 +14,7 @@ import { sendAdForPosition } from '../services/ads';
 import { deliverResource } from '../services/delivery';
 import { consumeRateLimit } from '../services/rate-limit';
 import { purchaseResource } from '../services/points';
-import { checkForceSubscribe } from '../services/subscription';
+import { checkForceSubscribe, type SubscriptionCheckResult } from '../services/subscription';
 import type { AdPosition, Resource, User } from '../types';
 import { AppError, errorMessage } from '../utils/helpers';
 import { isValidShortCode } from '../utils/shortcode';
@@ -156,6 +156,54 @@ export function decideFileBlockMode(fileCount: number, oneFilePerBlock: boolean)
   return oneFilePerBlock ? 'separate' : 'media_group';
 }
 
+/** 订阅按钮展示文案，沿用生产环境现有配置的名称。 */
+const SUBSCRIBE_BUTTON_LABEL = '🔥烧鸡收藏夹|清澈分类';
+
+export interface SubscribePrompt {
+  text: string;
+  keyboard: InlineKeyboard;
+}
+
+/**
+ * 统一的强制关注提示：为每个缺失频道生成可点击的加入按钮。
+ * 按钮 URL 优先使用 settings 中配置的邀请链接（支持私密频道），
+ * 无邀请链接时回退到 @username 的公开链接；两者都没有才退化为纯文本列出。
+ * 返回 null 表示没有可引导的频道（如配置缺失或 API 异常），由调用方直接回复 message。
+ *
+ * 私聊发短码与 /start=<短码> 深链两条入口必须共用本函数，
+ * 否则会出现其中一条路径只显示频道 ID、没有加入按钮的问题。
+ */
+export function buildSubscribePrompt(
+  check: SubscriptionCheckResult,
+  shortCode: string,
+): SubscribePrompt | null {
+  const missing = check.channels.filter((channel) => channel.status === 'not_member');
+  if (missing.length === 0) {
+    return null;
+  }
+  const keyboard = new InlineKeyboard();
+  const noLinkChannels: string[] = [];
+  missing.forEach((ch, index) => {
+    const url =
+      ch.inviteUrl ||
+      (ch.channel.startsWith('@') ? `https://t.me/${ch.channel.slice(1)}` : null);
+    if (!url) {
+      noLinkChannels.push(ch.display);
+      return;
+    }
+    // 多个频道时按钮文案追加序号，避免重复名称导致用户无法区分
+    const label =
+      missing.length > 1 ? `${SUBSCRIBE_BUTTON_LABEL} ${index + 1}` : SUBSCRIBE_BUTTON_LABEL;
+    keyboard.url(label, url).row();
+  });
+  keyboard.text('✅我已加入', `sub_recheck:${shortCode}`);
+  const lines = ['⬇️您需要加入以下频道才能使用：'];
+  if (noLinkChannels.length > 0) {
+    lines.push(noLinkChannels.join('\n'));
+  }
+  return { text: lines.join('\n'), keyboard };
+}
+
 export async function handleResourceRequest(
   ctx: BotContext,
   shortCode: string,
@@ -184,25 +232,13 @@ export async function handleResourceRequest(
     });
     subscriptionOk = check.ok;
     if (!check.ok) {
-      const keyboard = new InlineKeyboard();
-      const noLinkChannels: string[] = [];
-      for (const ch of check.channels.filter((c) => c.status === 'not_member')) {
-        const url = ch.inviteUrl || (ch.channel.startsWith('@')
-          ? `https://t.me/${ch.channel.slice(1)}`
-          : null);
-        if (url) {
-          keyboard.url(`🔥烧鸡收藏夹|清澈分类`, url).row();
-        } else {
-          noLinkChannels.push(ch.display);
-        }
+      const prompt = buildSubscribePrompt(check, shortCode);
+      if (prompt) {
+        const msg = await ctx.reply(prompt.text, { reply_markup: prompt.keyboard });
+        messageIds.push(msg.message_id);
+      } else {
+        await replyAndTrack(ctx, check.message, messageIds);
       }
-      keyboard.text('✅我已加入', `sub_recheck:${shortCode}`);
-      const lines = ['⬇️您需要加入以下频道才能使用：'];
-      if (noLinkChannels.length > 0) {
-        lines.push(noLinkChannels.join('\n'));
-      }
-      const msg = await ctx.reply(lines.join('\n'), { reply_markup: keyboard });
-      messageIds.push(msg.message_id);
       return { delivered: false, messageIds };
     }
   }
