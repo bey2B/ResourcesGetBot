@@ -14,13 +14,18 @@ import {
   finishBroadcast,
   getBroadcast,
   listBroadcasts,
-  listUserIdsForBroadcast,
-  rescheduleBroadcast,
-  updateBroadcastProgress,
   updateBroadcastStatus,
   writeAdminLog,
   type BroadcastRow,
 } from '../db/queries';
+import {
+  countBroadcastRecipients,
+  flushBroadcastBatch,
+  getBroadcastCursor,
+  listUserIdsForBroadcastBatch,
+  resetBroadcastCycle,
+  scheduleBroadcastContinuation,
+} from '../db/broadcast-batch';
 import { isAdminUserId } from '../utils/auth';
 import {
   AppError,
@@ -83,6 +88,10 @@ export interface BroadcastExecutionOptions {
   delayMs?: number;
   retryDelaysMs?: readonly number[];
   sleep?: (ms: number) => Promise<void>;
+  /** 单次调用最多发送的用户数，默认 300；剩余用户留给下一轮 Cron。 */
+  batchSize?: number;
+  /** 每处理多少用户落盘一次游标与计数，默认 50，用于缩小中断后的重复范围。 */
+  flushEvery?: number;
 }
 
 export interface BroadcastProgressReport {
@@ -92,6 +101,10 @@ export interface BroadcastProgressReport {
   success: number;
   fail: number;
   skip: number;
+  /** 本批实际处理（尝试发送）的用户数。 */
+  processed: number;
+  /** 本轮是否已全部发完（false 表示还有剩余用户，等下一轮 Cron 续发）。 */
+  finished: boolean;
   message: string;
   errors: string[];
   nextScheduledAt: string | null;
@@ -100,6 +113,15 @@ export interface BroadcastProgressReport {
 const BROADCAST_CAPTION_RE = /^\s*\/(bc|broadcast|bc_once|bc_daily|bc_weekly|bc_monthly)\b/i;
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [1000, 5000];
 const DEFAULT_BATCH_DELAY_MS = 35;
+/**
+ * 单批上限：300 个用户 × 35ms ≈ 10.5 秒，加上 Telegram 网络耗时仍能安全收尾，
+ * 远低于 Worker 后台执行上限；10,703 个用户约需 36 轮每分钟 Cron 发完。
+ */
+const DEFAULT_BATCH_SIZE = 300;
+/** 每 50 个用户落盘一次，Worker 被中断时最多重复 50 人，而不是整批 300 人。 */
+const DEFAULT_FLUSH_EVERY = 50;
+/** 单批未发完时，下一批的到期时间：1 分钟后，交给每分钟 Cron 立即接手。 */
+const BATCH_CONTINUE_DELAY_MS = 60_000;
 
 export const BROADCAST_START_CALLBACK = 'broadcast:start';
 export const BROADCAST_CONFIRM_NOW_CALLBACK = 'broadcast:confirm:now';
@@ -585,8 +607,12 @@ export async function safeWriteAdminLog(
 }
 
 /**
- * 串行执行一条广播并汇总进度。
- * 返回的报告同时包含最终状态与下一次定时执行时间，供 handler/cron 直接使用。
+ * 执行一条广播的「一个批次」并汇总进度。
+ *
+ * 关键约束：Worker 的后台执行（waitUntil / Cron）有时间上限，绝不能在单次调用里
+ * 遍历全部用户。这里每次最多处理 batchSize 个用户，把游标 last_user_id 与累计计数
+ * 落盘；还有剩余用户时置回 pending 并把 scheduled_at 设为 1 分钟后，交给每分钟 Cron
+ * 续发；只有全部发完才写终态与 broadcast_finished 日志。
  */
 export async function executeBroadcast(
   db: D1Database,
@@ -604,17 +630,36 @@ export async function executeBroadcast(
       success: broadcast.success_count,
       fail: broadcast.fail_count,
       skip: broadcast.skip_count,
+      processed: 0,
+      finished: false,
       message: '广播未在可执行状态，已跳过。',
       errors: [],
       nextScheduledAt: broadcast.scheduled_at,
     };
   }
-  const content = parseBroadcastContent(broadcast.content);
-  const userIds = await listUserIdsForBroadcast(db);
-  const counts = { success: 0, fail: 0, skip: 0 };
-  const errors: string[] = [];
+  // 抢占后以库里的最新行为准：游标与累计计数都来自上一次落盘，不能用手里的旧快照。
+  const current = (await getBroadcast(db, broadcast.id)) ?? broadcast;
+  const batchSize = Math.max(options.batchSize ?? DEFAULT_BATCH_SIZE, 1);
+  const flushEvery = Math.max(options.flushEvery ?? DEFAULT_FLUSH_EVERY, 1);
+  const content = parseBroadcastContent(current.content);
   const sleep = options.sleep ?? defaultSleep;
   const delayMs = options.delayMs ?? DEFAULT_BATCH_DELAY_MS;
+  // 目标用户总数只在第一批发之前算一次，后续批次沿用，避免中途人数变化导致进度抖动。
+  const total = current.total_count > 0 ? current.total_count : await countBroadcastRecipients(db);
+  // 计数跨批次累加：起点是上一次批次的累计值。
+  const counts = {
+    success: current.success_count,
+    fail: current.fail_count,
+    skip: current.skip_count,
+  };
+  let cursor = await getBroadcastCursor(db, broadcast.id);
+  const errors: string[] = [];
+  // 多取一条用来判断「是否还有剩余用户」：刚好取满一整批时也能立刻收尾，
+  // 不用为了确认结尾而多跑一轮空批次；真正发送的仍然只有 batchSize 个。
+  const fetched = await listUserIdsForBroadcastBatch(db, cursor, batchSize + 1);
+  const userIds = fetched.slice(0, batchSize);
+  const hasMore = fetched.length > batchSize;
+  let processed = 0;
   for (const userId of userIds) {
     const outcome = await sendWithRetry(userId, content, deliverer, options);
     if (outcome.result === 'success') {
@@ -630,28 +675,60 @@ export async function executeBroadcast(
         errors.push(`用户 ${userId} 失败：${outcome.error}`);
       }
     }
+    // 游标始终指向「已尝试过」的最大 user_id，中断后续发时不会回头重发。
+    cursor = userId;
+    processed += 1;
+    if (processed % flushEvery === 0) {
+      await flushBroadcastBatch(db, broadcast.id, {
+        totalCount: total,
+        successCount: counts.success,
+        failCount: counts.fail,
+        skipCount: counts.skip,
+        lastUserId: cursor,
+      });
+    }
     if (delayMs > 0) {
       await sleep(delayMs);
     }
   }
-  const total = userIds.length;
-  await updateBroadcastProgress(db, broadcast.id, {
+  // 本批收尾：无条件落盘一次，保证游标与计数不因定时器粒度而丢最后一批。
+  await flushBroadcastBatch(db, broadcast.id, {
     totalCount: total,
     successCount: counts.success,
     failCount: counts.fail,
     skipCount: counts.skip,
+    lastUserId: cursor,
   });
+  // 多取的那一条存在，说明还有剩余用户：把状态交回 pending，1 分钟后由每分钟 Cron 续发。
+  if (hasMore) {
+    const nextScheduledAt = new Date(now.getTime() + BATCH_CONTINUE_DELAY_MS).toISOString();
+    await scheduleBroadcastContinuation(db, broadcast.id, nextScheduledAt);
+    return {
+      broadcastId: broadcast.id,
+      status: 'pending',
+      total,
+      success: counts.success,
+      fail: counts.fail,
+      skip: counts.skip,
+      processed,
+      finished: false,
+      message: `广播 #${broadcast.id} 第 ${processed} 批完成：成功 ${counts.success}，失败 ${counts.fail}，跳过 ${counts.skip}，剩余用户将在 1 分钟内继续发送。`,
+      errors: errors.slice(0, 5),
+      nextScheduledAt,
+    };
+  }
   let status: BroadcastStatus;
   let nextScheduledAt: string | null = null;
   const isRecurring =
-    broadcast.type === 'daily' || broadcast.type === 'weekly' || broadcast.type === 'monthly';
+    current.type === 'daily' || current.type === 'weekly' || current.type === 'monthly';
   if (isRecurring) {
     nextScheduledAt = computeNextOccurrence(
-      broadcast.type,
-      broadcast.scheduled_at ?? now.toISOString(),
+      current.type,
+      current.scheduled_at ?? now.toISOString(),
       now,
     );
-    await rescheduleBroadcast(db, broadcast.id, nextScheduledAt);
+    // 周期广播：清空本轮计数并把游标归零，下一轮才能从第一个用户重新发。
+    await resetBroadcastCycle(db, broadcast.id, nextScheduledAt);
     await updateBroadcastStatus(db, broadcast.id, 'scheduled');
     status = 'scheduled';
   } else {
@@ -667,7 +744,7 @@ export async function executeBroadcast(
     db,
     broadcast.created_by,
     'broadcast_finished',
-    `id=${broadcast.id} type=${broadcast.type} total=${total} success=${counts.success} fail=${counts.fail} skip=${counts.skip} status=${status}`,
+    `id=${broadcast.id} type=${current.type} total=${total} success=${counts.success} fail=${counts.fail} skip=${counts.skip} status=${status}`,
   );
   return {
     broadcastId: broadcast.id,
@@ -676,6 +753,8 @@ export async function executeBroadcast(
     success: counts.success,
     fail: counts.fail,
     skip: counts.skip,
+    processed,
+    finished: true,
     message: `广播 #${broadcast.id} 执行完成：成功 ${counts.success}，失败 ${counts.fail}，跳过 ${counts.skip}。`,
     errors: errors.slice(0, 5),
     nextScheduledAt,
@@ -683,14 +762,20 @@ export async function executeBroadcast(
 }
 
 export function buildBroadcastReport(report: BroadcastProgressReport): string {
+  const remaining = Math.max(report.total - report.success - report.fail - report.skip, 0);
   const lines = [
-    `广播 #${report.broadcastId} 执行完成`,
+    report.finished
+      ? `广播 #${report.broadcastId} 执行完成`
+      : `广播 #${report.broadcastId} 本轮已完成（分批发送中）`,
     `总计：${report.total}`,
     `成功：${report.success}`,
     `失败：${report.fail}`,
     `跳过：${report.skip}`,
     `状态：${BROADCAST_STATUS_LABELS[report.status] ?? report.status}`,
   ];
+  if (!report.finished) {
+    lines.push(`剩余：${remaining}（每分钟自动续发，全部发完后再次汇报）`);
+  }
   if (report.nextScheduledAt) {
     lines.push(`下次发送：${formatLocalDateTime(report.nextScheduledAt)}`);
   }
