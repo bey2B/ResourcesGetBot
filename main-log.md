@@ -56,3 +56,20 @@
 - 260818 2002 开发完成：任务U8 (DEV_ID: 01a014a1-cce9-7843-b386-12a489aecc02)
 - 260818 2002 任务U8 标记为 ✅
 - 260818 2002 功能更新全部完成：文案 15/15 一致，typecheck/build/test/db:local/admin build/冒烟全部通过
+
+## 广播分批发送修复（261108）
+
+- 261108 0914 定位根因：立即广播把 10,703 用户塞进一次 waitUntil，sleep 累计约 374 秒，Worker 被终止后 status/进度未回写；Cron 不扫 sending 导致永久卡死
+- 261108 0914 方案确认：游标分批 + 进度定期落盘 + 每分钟 Cron 续发 + 陈旧 sending 自动恢复（用户指定方案）
+- 261108 0914 启动开发：广播分批发送（B1-B7）
+- 261108 0930 完成 B1 数据库：broadcasts 加 last_user_id，新增 migrations/0001_broadcast_batching.sql
+- 261108 0930 完成 B2 数据层：countBroadcastRecipients / listUserIdsForBroadcastBatch / scheduleBroadcastContinuation / recoverStaleBroadcasts / flushBroadcastBatch / resetBroadcastCycle
+- 261108 0930 完成 B3 broadcast.ts：executeBroadcast 改为单批执行，每 50 人落盘游标，未发完置 pending + 1 分钟后到期
+- 261108 0930 完成 B4 cron.ts：每轮先恢复陈旧 sending（默认 5 分钟阈值）再逐条处理一批
+- 261108 0930 完成 B5 index.ts：新增 * * * * * 触发器，与 */15 共用同一处理函数，仅在全部发完或出错时通知管理员
+- 261108 0945 完成 B6 单测：tests/broadcast.test.ts 用 node:sqlite 跑真实 schema 覆盖首批/续发/收尾/恢复/防误判
+- 261108 0945 完成 B7 验证：tsc 0 错误，vitest 7 文件 31/31 通过；10,703 用户仿真 36 轮发完、零重复、零误发
+- 261108 1735 完成 B8 重构：分批相关 SQL 独立到 src/db/broadcast-batch.ts，queries.ts 保持与上游逐字节一致（避免 2159 行大文件整文件重写带来的转写误差）
+- 261108 1745 重构后重跑：tsc 0 错误，vitest 7 文件 31/31 通过
+- 261108 1805 推送 beta 完成，逐文件 blob SHA 与本地逐字节一致
+- 261108 1805 部署待办：① 生产库执行 migrations/0001_broadcast_batching.sql；② wrangler.toml 补 * * * * * 触发器；③ 决定 #10/#11/#12 是否补发（不补发则先置 cancelled）
