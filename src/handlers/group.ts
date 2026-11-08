@@ -48,13 +48,17 @@ function scheduleDeletion(
       await safeDelete(ctx, chatId, messageId);
     }
   };
+  const delayed = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      run().then(resolve).catch(resolve);
+    }, seconds * 1000);
+  });
   if (ctx.env.waitUntil) {
-    ctx.env.waitUntil(run());
-    return;
+    // waitUntil 只延长 Worker 存活，不会延迟执行；必须把定时器本身包进 Promise
+    ctx.env.waitUntil(delayed);
+  } else {
+    void delayed;
   }
-  setTimeout(() => {
-    void run().catch(() => undefined);
-  }, seconds * 1000);
 }
 
 export function registerGroupHandlers(bot: Bot<BotContext>): void {
